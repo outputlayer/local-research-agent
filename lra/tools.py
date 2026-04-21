@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 
@@ -233,6 +234,68 @@ class ReadNotes(BaseTool):
             return "(заметок нет)"
         text = NOTES_PATH.read_text(encoding='utf-8')
         return text[-20000:] if len(text) > 20000 else text
+
+
+@register_tool("read_notes_focused")
+class ReadNotesFocused(BaseTool):
+    """Anti-drift фильтр: возвращает только блоки notes.md, релевантные focus-запросу.
+
+    Блоки делятся по двойному переводу строки. Для каждого блока считается jaccard между
+    keyword_set(block) и keyword_set(focus); блоки < min_jaccard отбрасываются, остальные
+    сортируются по релевантности и обрезаются по max_chars. Решает проблему semantic drift
+    в workspace-памяти (накопление нерелевантных фактов по мере роста notes).
+    """
+    description = ("Читает notes.md с anti-drift фильтром по focus-запросу. "
+                   "Возвращает только блоки, релевантные focus (jaccard keyword overlap).")
+    parameters = [
+        {"name": "focus", "type": "string",
+         "description": "Фокусная фраза (например, из [FOCUS] plan.md)", "required": True},
+        {"name": "max_chars", "type": "integer",
+         "description": "Лимит символов вывода (default 4000)", "required": False},
+        {"name": "min_jaccard", "type": "number",
+         "description": "Порог релевантности 0..1 (default 0.08)", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        from .utils import jaccard as _jaccard
+        from .utils import keyword_set as _kws
+        args = parse_args(params)
+        focus = (args.get("focus") or "").strip()
+        if not focus:
+            return "(focus is required)"
+        max_chars = int(args.get("max_chars") or 4000)
+        min_jac = float(args.get("min_jaccard") or 0.08)
+
+        if not NOTES_PATH.exists():
+            return "(заметок нет)"
+        text = NOTES_PATH.read_text(encoding='utf-8')
+        if not text.strip():
+            return "(заметки пустые)"
+
+        focus_kws = _kws(focus)
+        if not focus_kws:
+            return text[-max_chars:]
+
+        blocks = [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+        scored = [(b, _jaccard(_kws(b), focus_kws)) for b in blocks]
+        relevant = [(b, s) for b, s in scored if s >= min_jac]
+        relevant.sort(key=lambda x: x[1], reverse=True)
+
+        if not relevant:
+            return (f"(0/{len(blocks)} блоков прошли фильтр jaccard>={min_jac} "
+                    f"для focus='{focus[:60]}'; рассмотри более широкий порог или read_notes)")
+
+        out_parts: list[str] = []
+        total = 0
+        header = f"[focus-filter: {len(relevant)}/{len(blocks)} блоков, jaccard>={min_jac}]\n\n"
+        budget = max_chars - len(header)
+        for block, score in relevant:
+            chunk = f"<!-- score={score:.3f} -->\n{block}\n"
+            if total + len(chunk) > budget:
+                break
+            out_parts.append(chunk)
+            total += len(chunk)
+        return header + "\n".join(out_parts)
 
 
 @register_tool("write_plan")

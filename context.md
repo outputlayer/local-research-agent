@@ -23,7 +23,7 @@
 | `lra/pipeline.py` | 736 | оркестратор. Phase 1 (explorer↔replanner) → compressor? → Phase 2 (synthesizer) → Phase 3 (writer ↔ critics) → Phase 4 (validator) → HITL? | `research_loop(query, depth, critic_rounds)`, `resume_research()` |
 | `lra/__init__.py` | ~10 | `__all__` re-exports | — |
 
-## `lra/tools.py` — 22 @register_tool классов
+## `lra/tools.py` — 23 @register_tool классов
 
 Группы (порядок как в файле):
 
@@ -31,7 +31,7 @@
 
 **Sandbox:** `RunPython` — `subprocess` с RLIMIT_CPU=5s, AS=512MB, socket monkey-patch, write только в `/tmp`. **Best-effort** (см. docstring).
 
-**Notes:** `ReadNotes`, `AppendNotes` (с pre-append verifier если `notes_strict=True`), `CompactNotes`.
+**Notes:** `ReadNotes`, `ReadNotesFocused` (anti-drift: jaccard-фильтр блоков по focus-запросу), `AppendNotes` (с pre-append verifier если `notes_strict=True`), `CompactNotes`.
 
 **Draft:** `ReadDraft`, `WriteDraft`, `AppendDraft`.
 
@@ -109,7 +109,7 @@ research_loop("grounding LLMs", depth=6, critic_rounds=2)
 | `research/querylog.md` | tools (log_query) | dedup проверки | **да** (НЕ `/clean`) |
 | `research/archive/<ts>_<slug>/` | end-of-run snapshot | — | — |
 
-## Тесты (133, все в `tests/`)
+## Тесты (139, все в `tests/`)
 
 | Файл | Тестов | Что покрывает |
 |---|---|---|
@@ -124,6 +124,7 @@ research_loop("grounding LLMs", depth=6, critic_rounds=2)
 | `tests/test_pipeline_integration.py` | ~5 | e2e с замоканным LLM — все фазы |
 | `tests/test_append_verifier.py` | 8 | `notes_strict` — блокирует unknown arxiv-id |
 | `tests/test_hitl.py` | 7 | HITL: disabled-default, non-TTY, approve, revise, Ctrl+C |
+| `tests/test_notes_focused.py` | 6 | `read_notes_focused` — jaccard-фильтр блоков notes.md |
 | `tests/test_metrics.py` | ~5 | `RunMetrics`, `count_critic_issues` |
 | `tests/test_prompts.py` | ~3 | smoke prompts |
 | остальное | ~12 | smoke / compressor / logger |
