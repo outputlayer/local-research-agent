@@ -20,7 +20,7 @@ from lra.config import (
 )
 from lra.kb import KB_PATH
 from lra.llm import get_mlx
-from lra.pipeline import research_loop
+from lra.pipeline import research_loop, resume_research
 from lra.plan import PLAN_JSON_PATH
 
 
@@ -56,6 +56,7 @@ def main():
     _check_clis()
     print("✅ Готово. Команды:")
     print("   <тема>              — запустить ресёрч (alias: /research <тема>)")
+    print("   /resume             — дописать отчёт из существующих notes/synthesis/kb (без explorer)")
     print("   /clean              — очистить рабочую папку (lessons/querylog остаются)")
     print("   /forget             — стереть + глобальную Reflexion-память (archive и cache сохраняются)")
     print("   /reset              — ПОЛНАЯ очистка: research/*, archive/*, .cache/*, run.log")
@@ -71,6 +72,10 @@ def main():
             continue
         if q == "/exit":
             return
+        if q == "/resume":
+            resume_research()
+            print()
+            continue
         if q in ("/clean", "/clean-research"):
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH):
                 p.unlink(missing_ok=True)

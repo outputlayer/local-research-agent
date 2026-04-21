@@ -12,7 +12,7 @@ from . import cli as cli_run
 from . import kb as kb_mod
 from . import plan as plan_mod
 from . import tools  # noqa: F401
-from .config import CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR
+from .config import CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR, SYNTHESIS_PATH
 from .logger import get_logger
 from .memory import reset_research
 from .metrics import CriticRound, IterationMetric, RunMetrics, count_critic_issues
@@ -313,34 +313,93 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                "💡")
     metrics.synthesis_seconds = time.time() - t_syn
 
+    _finalize_draft(query, metrics, critic_rounds)
+
+
+def _build_kb_context(query: str) -> str:
+    """Собирает authoritative-блок из kb.jsonl для writer'а и fallback'а."""
+    kb_all = kb_mod.load()
+    repos = sorted([a for a in kb_all if a.get("kind") == "repo"],
+                   key=lambda a: a.get("stars", 0), reverse=True)[:8]
+    papers = kb_mod.search(query, k=12, atoms=kb_all) or \
+        [a for a in kb_all if a.get("kind") == "paper"][:12]
+    blocks: list[str] = []
+    if repos:
+        blocks.append("Репозитории (для секции '## Реализации'):")
+        for r in repos:
+            blocks.append(
+                f"- [repo: {r.get('id','?')} ★{r.get('stars',0)} {r.get('lang','')}] "
+                f"{r.get('url','')} — {r.get('claim','')[:180]}")
+    else:
+        blocks.append("Репозитории: в KB нет репо с ★≥10 (используй точную строку-заглушку из промпта).")
+    if papers:
+        blocks.append("\nPapers (для секций '## Подходы' / '## Бенчмарки и метрики'):")
+        for p in papers:
+            blocks.append(f"- [{p.get('id','?')}] {p.get('title','')[:90]} — {p.get('claim','')[:180]}")
+    return "\n".join(blocks)
+
+
+def _fallback_draft_from_kb(query: str) -> None:
+    """Программный fallback если writer не смог 2 раза подряд: собираем минимальный
+    draft.md прямо из kb.jsonl + synthesis.md. Пользователь получит хоть что-то
+    вместо пустоты. Все утверждения — прямые выдержки из claim'ов KB, так что
+    validator пропустит [id] без проблем.
+    """
+    kb_all = kb_mod.load()
+    papers = [a for a in kb_all if a.get("kind") == "paper"][:15]
+    repos = sorted([a for a in kb_all if a.get("kind") == "repo"],
+                   key=lambda a: a.get("stars", 0), reverse=True)[:5]
+    synth = SYNTHESIS_PATH.read_text(encoding="utf-8") if SYNTHESIS_PATH.exists() else ""
+
+    lines = [f"# {query}", "",
+             "> Fallback-черновик: собран программно из kb.jsonl и synthesis.md "
+             "(writer не вызвал write_draft после retry).", ""]
+    lines.append("## Краткий ответ")
+    for p in papers[:6]:
+        claim_short = (p.get('claim', '') or '').replace('\n', ' ')[:180]
+        lines.append(f"- [{p.get('id','?')}] {p.get('title','')[:70]}: {claim_short}")
+    lines.append("")
+    lines.append("## Подходы")
+    for p in papers[:8]:
+        lines.append(f"\n### {p.get('title','?')[:80]} [{p.get('id','?')}]")
+        claim = (p.get('claim', '') or '').strip()
+        lines.append(claim[:500] if claim else "_(claim отсутствует в kb)_")
+    lines.append("")
+    lines.append("## Реализации")
+    if repos:
+        for i, r in enumerate(repos, 1):
+            lines.append(f"{i}. [{r.get('id','?')} ★{r.get('stars',0)}] ({r.get('lang','')}) — "
+                         f"{(r.get('claim','') or '')[:150]}")
+    else:
+        lines.append("Публичных реализаций с ★≥10 в собранной выборке не обнаружено.")
+    lines.append("")
+    lines.append("## Ключевые инсайты")
+    lines.append(synth or "_(synthesis.md отсутствует)_")
+    lines.append("")
+    lines.append("## Источники")
+    lines.append("### Papers")
+    for i, p in enumerate(papers, 1):
+        lines.append(f"{i}. [{p.get('id','?')}] {p.get('title','')[:100]}")
+    if repos:
+        lines.append("\n### Repositories")
+        for i, r in enumerate(repos, 1):
+            lines.append(f"{i}. {r.get('id','?')} ({r.get('url','')})")
+    DRAFT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"   🛟 fallback-draft собран программно: {DRAFT_PATH} "
+          f"({DRAFT_PATH.stat().st_size} симв)")
+
+
+def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None:
+    """Фаза 2 (writer) + 3 (critic) + 4 (validator). Выделена для переиспользования
+    в resume_research: позволяет дописать отчёт если phase 1 уже прошла но draft пустой.
+    """
     # Фаза 2 — writer
     print("\n✍️  Фаза 2: writer — финальный черновик")
     writer = build_bot(WRITER_PROMPT,
                        ["read_plan", "read_notes", "read_synthesis", "read_draft",
                         "write_draft", "append_draft"],
                        max_tokens=6144)
-    # Инжект KB — передаём writer'у свежий снимок атомов (репо + top papers) отдельным
-    # блоком, чтобы секции "## Репозитории" и "## Источники" формировались из KB, а не
-    # из уходящего в компрессию notes.md.
-    kb_all = kb_mod.load()
-    repos = sorted([a for a in kb_all if a.get("kind") == "repo"],
-                   key=lambda a: a.get("stars", 0), reverse=True)[:8]
-    papers = kb_mod.search(query, k=12, atoms=kb_all) or \
-        [a for a in kb_all if a.get("kind") == "paper"][:12]
-    kb_blocks: list[str] = []
-    if repos:
-        kb_blocks.append("Репозитории (для секции '## Репозитории'):")
-        for r in repos:
-            kb_blocks.append(
-                f"- [repo: {r.get('id','?')} ★{r.get('stars',0)} {r.get('lang','')}] "
-                f"{r.get('url','')} — {r.get('claim','')[:180]}")
-    else:
-        kb_blocks.append("Репозитории: в KB нет репо с ★≥10 (используй точную строку-заглушку из промпта).")
-    if papers:
-        kb_blocks.append("\nPapers (для таблиц '## Подходы' / '## Бенчмарки'):")
-        for p in papers:
-            kb_blocks.append(f"- [{p.get('id','?')}] {p.get('title','')[:90]} — {p.get('claim','')[:180]}")
-    kb_context = "\n".join(kb_blocks)
+    kb_context = _build_kb_context(query)
     writer_msgs = [{"role": "user",
                     "content": (f"Собери финальный отчёт по теме: {query}\n\n"
                                 f"KB context (authoritative список источников — "
@@ -351,7 +410,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     writer_msgs.extend(resp)
 
     # Sanity-check: writer должен был вызвать write_draft. Если файл не создан или <200 симв —
-    # retry со строгим сообщением. Без этого критик будет зря крутиться на пустоте.
+    # retry со строгим сообщением. Если и после retry пусто — fallback программно.
     def _draft_too_small() -> bool:
         return not DRAFT_PATH.exists() or DRAFT_PATH.stat().st_size < 200
 
@@ -367,6 +426,10 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         resp = _run_agent(writer, writer_msgs, "🔁")
         writer_msgs.extend(resp)
 
+    if _draft_too_small():
+        print("   ❌ writer провалился и после retry — fallback на программный сбор из KB")
+        _fallback_draft_from_kb(query)
+
     # Фаза 3 — critic с конвергенцией
     print(f"\n🔍 Фаза 3: критик ({critic_rounds} раунд(ов))")
     critic = build_bot(CRITIC_PROMPT,
@@ -375,9 +438,6 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     prev_critique = ""
     for i in range(1, critic_rounds + 1):
         print(f"\n── критика {i}/{critic_rounds} ──")
-        # Если draft всё ещё пустой — критик бесполезен, но дадим ему шанс вскрыть это
-        # через тулы. Явно инструктируем использовать read_draft/read_notes/read_synthesis
-        # (наблюдали кейс когда критик забывал про тулы и просил текст в чат).
         t_cr = time.time()
         c_resp = _run_agent(critic,
                             [{"role": "user", "content": (
@@ -391,13 +451,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         c_seconds = time.time() - t_cr
         critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
         issues = count_critic_issues(critique)
-        # APPROVED валидно ТОЛЬКО если:
-        #   - draft.md существует и непустой (иначе критик галлюцинирует)
-        #   - критик вернул короткий ответ с APPROVED как финальное слово (не в середине объяснения)
-        #   - 0 структурных правок
         draft_ok = DRAFT_PATH.exists() and DRAFT_PATH.stat().st_size >= 200
-        # "APPROVED" должно быть отдельным словом в последних 50 символах ответа
-        # (чтобы не ловить упоминание в середине текста вроде «ответь APPROVED если...»)
         tail = critique[-80:].upper().strip()
         approved_keyword = tail.endswith("APPROVED") or tail == "APPROVED"
         approved = draft_ok and issues == 0 and approved_keyword
@@ -450,3 +504,49 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     metrics_path = metrics.finish()
     print(f"📊 Метрики прогона: {metrics_path.relative_to(RESEARCH_DIR.parent)} "
           f"({metrics.total_seconds:.1f}с, {len(metrics.iterations)} итераций)")
+
+
+def resume_research(query: str | None = None, critic_rounds: int = 2):
+    """Продолжает прерванный прогон: пропускает explorer/replanner, использует
+    существующие notes.md/plan.md/kb.jsonl/synthesis.md и идёт сразу к writer/critic.
+
+    Если synthesis.md отсутствует — запускает только фазу синтеза, затем writer.
+    Query берётся из plan.md если не задан явно.
+    """
+    # Восстанавливаем query из plan.md если не передан
+    if query is None and PLAN_PATH.exists():
+        for ln in PLAN_PATH.read_text(encoding="utf-8").splitlines():
+            if ln.startswith("# Plan:"):
+                query = ln.replace("# Plan:", "").strip()
+                break
+    if not query:
+        raise RuntimeError("не могу восстановить query: передай явно или убедись что plan.md существует")
+
+    print(f"🔄 RESUME: продолжаем прогон по теме: {query}")
+    print(f"📁 Рабочая папка: {RESEARCH_DIR}")
+    have = {
+        "notes.md": NOTES_PATH.exists() and NOTES_PATH.stat().st_size > 100,
+        "plan.md": PLAN_PATH.exists(),
+        "kb.jsonl": kb_mod.KB_PATH.exists(),
+        "synthesis.md": SYNTHESIS_PATH.exists() and SYNTHESIS_PATH.stat().st_size > 100,
+    }
+    for k, v in have.items():
+        print(f"   {'✓' if v else '✗'} {k}")
+    if not have["notes.md"]:
+        raise RuntimeError("notes.md пуст или отсутствует — нечего продолжать, запусти новый research")
+
+    metrics = RunMetrics(query=query)
+
+    if not have["synthesis.md"]:
+        print("\n💡 synthesis.md отсутствует — запускаем фазу синтеза")
+        synthesizer = build_bot(SYNTHESIZER_PROMPT,
+                                ["read_plan", "read_notes", "write_synthesis", "run_python",
+                                 "kb_search"],
+                                max_tokens=4096)
+        t_syn = time.time()
+        _run_agent(synthesizer,
+                   [{"role": "user", "content": f"Произведи пять типов инсайтов по теме: {query}"}],
+                   "💡")
+        metrics.synthesis_seconds = time.time() - t_syn
+
+    _finalize_draft(query, metrics, critic_rounds)
