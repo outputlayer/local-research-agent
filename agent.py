@@ -5,7 +5,19 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from lra.config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
+from lra.config import (
+    ARCHIVE_DIR,
+    CACHE_DIR,
+    CFG,
+    DRAFT_PATH,
+    LESSONS_PATH,
+    NOTES_PATH,
+    PLAN_PATH,
+    QUERYLOG_PATH,
+    RESEARCH_DIR,
+    RUN_LOG_PATH,
+    SYNTHESIS_PATH,
+)
 from lra.kb import KB_PATH
 from lra.llm import get_mlx
 from lra.pipeline import research_loop
@@ -44,7 +56,8 @@ def main():
     print("✅ Готово. Команды:")
     print("   <тема>              — запустить ресёрч (alias: /research <тема>)")
     print("   /clean              — очистить рабочую папку (lessons/querylog остаются)")
-    print("   /forget             — стереть ВСЁ, включая глобальную Reflexion-память")
+    print("   /forget             — стереть + глобальную Reflexion-память (archive и cache сохраняются)")
+    print("   /reset              — ПОЛНАЯ очистка: research/*, archive/*, .cache/*, run.log")
     print("   /exit               — выход\n")
 
     while True:
@@ -60,13 +73,34 @@ def main():
         if q in ("/clean", "/clean-research"):
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH):
                 p.unlink(missing_ok=True)
-            print("🗑️  research/ очищена (lessons/querylog сохранены — глобальная память)\n")
+            print("🗑️  research/ очищена (lessons/querylog/archive сохранены)\n")
             continue
         if q == "/forget":
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH,
                       LESSONS_PATH, QUERYLOG_PATH):
                 p.unlink(missing_ok=True)
-            print("🧠  Всё стёрто, включая глобальные lessons/querylog\n")
+            print("🧠  Стёрто + глобальные lessons/querylog (archive и cache остаются)\n")
+            continue
+        if q == "/reset":
+            # Полная очистка: всё в research/ (кроме самой папки), весь кеш, архив.
+            # Используем shutil.rmtree только для поддиректорий — саму research/ сохраняем.
+            confirm = input("⚠️  /reset удалит research/* + archive/* + .cache/*. "
+                            "Напиши 'yes' для подтверждения: ").strip().lower()
+            if confirm != "yes":
+                print("❌ отменено\n")
+                continue
+            # файлы
+            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH,
+                      LESSONS_PATH, QUERYLOG_PATH, RUN_LOG_PATH):
+                p.unlink(missing_ok=True)
+            # поддиректории
+            for d in (ARCHIVE_DIR, CACHE_DIR):
+                if d.exists():
+                    shutil.rmtree(d, ignore_errors=True)
+            # пересоздаём пустые каталоги
+            RESEARCH_DIR.mkdir(exist_ok=True)
+            ARCHIVE_DIR.mkdir(exist_ok=True)
+            print("💥  Полный ресет: research/*, archive/*, .cache/*, run.log стёрты\n")
             continue
 
         if q.startswith("/research"):

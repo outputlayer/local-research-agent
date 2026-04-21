@@ -82,6 +82,7 @@ class HfPapers(BaseTool):
         data.sort(key=lambda x: x.get("published_at", ""), reverse=True)
         data = data[:limit]
         lines = []
+        auto_saved = 0
         for paper in data:
             authors = ", ".join(a["name"] for a in paper.get("authors", [])[:4])
             if len(paper.get("authors", [])) > 4:
@@ -91,7 +92,21 @@ class HfPapers(BaseTool):
             date = paper.get("published_at", "")[:10]
             pid = paper.get("id", "")
             lines.append(f"[{pid}] {title}\n  {authors} · {date}\n  https://hf.co/papers/{pid}\n  {summary}")
-        return "\n\n".join(lines)
+            # Автосейв скелетного атома в KB — модель всё равно забывает kb_add вручную.
+            # claim=summary (первые 400 симв) даст BM25-поиску на что опереться на следующих итерациях.
+            if pid:
+                try:
+                    kb_mod.add(kb_mod.Atom(
+                        id=pid, kind="paper", topic=query,
+                        title=title[:200], authors=authors[:200],
+                        url=f"https://hf.co/papers/{pid}",
+                        claim=summary[:400],
+                    ))
+                    auto_saved += 1
+                except Exception as e:
+                    log.debug("kb auto-save paper failed %s: %s", pid, e)
+        footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
+        return "\n\n".join(lines) + footer
 
 
 @register_tool("run_python")
@@ -339,6 +354,7 @@ class GithubSearch(BaseTool):
             return f"нет результатов на GitHub: {query}"
 
         lines = []
+        auto_saved = 0
         if search_type == "repos":
             for item in data:
                 name = item.get("fullName", "?")
@@ -351,6 +367,18 @@ class GithubSearch(BaseTool):
                     f"★{stars:>6}  [{name}]({url})  {lang}  updated:{pushed}\n"
                     f"         {desc}"
                 )
+                # Автосейв: только репо с ≥10 звёзд — отсекает мусор и форки без описания.
+                if name != "?" and stars >= 10:
+                    try:
+                        kb_mod.add(kb_mod.Atom(
+                            id=name, kind="repo", topic=query,
+                            title=name, url=url,
+                            stars=int(stars or 0), lang=lang,
+                            claim=desc or f"{lang} репозиторий, {stars}★",
+                        ))
+                        auto_saved += 1
+                    except Exception as e:
+                        log.debug("kb auto-save repo failed %s: %s", name, e)
         else:  # code
             for item in data:
                 path = item.get("path", "")
@@ -358,7 +386,8 @@ class GithubSearch(BaseTool):
                 repo = (item.get("repository") or {}).get("fullName", "?")
                 lines.append(f"[{repo}] {path}\n  {url}")
 
-        return "\n\n".join(lines)
+        footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
+        return "\n\n".join(lines) + footer
 
 
 @register_tool("kb_add")
@@ -427,4 +456,37 @@ class KbSearch(BaseTool):
         if not hits:
             return "(в kb пока ничего релевантного)"
         return kb_mod.format_atoms(hits)
+
+
+# ── Унифицированный [TOOL_CALL] лог для всех тулов ─────────────────────────
+def _wrap_with_logging(cls):
+    """Оборачивает `cls.call`, чтобы каждый вызов попадал в лог единообразно."""
+    orig = cls.call
+    if getattr(orig, "_tool_logged", False):
+        return cls
+    tool_name = getattr(cls, "name", cls.__name__)
+
+    def call(self, params: str = "", **kwargs):  # type: ignore[override]
+        try:
+            preview_src = params if isinstance(params, str) else json.dumps(params, ensure_ascii=False)
+        except Exception:
+            preview_src = str(params)
+        preview = (preview_src or "").replace("\n", " ")[:160]
+        log.info("[TOOL_CALL] %s(%s)", tool_name, preview)
+        try:
+            return orig(self, params, **kwargs)
+        except Exception as e:
+            log.warning("[TOOL_ERR]  %s: %s", tool_name, e)
+            raise
+
+    call._tool_logged = True  # type: ignore[attr-defined]
+    cls.call = call
+    return cls
+
+
+# Применяем ко всем тулам, определённым в этом модуле
+for _name, _obj in list(globals().items()):
+    if isinstance(_obj, type) and issubclass(_obj, BaseTool) and _obj is not BaseTool:
+        if _obj.__module__ == __name__:
+            _wrap_with_logging(_obj)
 
