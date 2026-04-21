@@ -1,9 +1,21 @@
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+.DS_Store
 workspace/
-research/archive/
+
+# рабочие артефакты текущего прогона (восстанавливаются при запуске)
 research/draft.md
 research/notes.md
 research/plan.md
 research/synthesis.md
+research/lessons.md
+research/querylog.md
+research/archive/
+
+# HF/MLX кэш, если вдруг попадёт в репо
+.cache/
+*.safetensors
+*.gguf
+*.bin

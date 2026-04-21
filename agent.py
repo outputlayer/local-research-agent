@@ -11,10 +11,17 @@
 
 from __future__ import annotations
 import json, re, subprocess, sys
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
 import json5
+from qwen_agent.agents import Assistant
+from qwen_agent.llm.base import register_llm
+from qwen_agent.llm.function_calling import BaseFnCallModel
+from qwen_agent.llm.schema import ASSISTANT, Message
+from qwen_agent.tools.base import BaseTool, register_tool
+from qwen_agent.utils.output_beautify import typewriter_print
 
 
 def _parse_args(params) -> dict:
@@ -53,12 +60,7 @@ def _parse_args(params) -> dict:
             return {key: m.group(1).replace('\\n', '\n').replace('\\"', '"')}
     # Совсем ничего — отдаём как content чтобы инструменты не падали
     return {"content": params}
-from qwen_agent.agents import Assistant
-from qwen_agent.llm.base import register_llm
-from qwen_agent.llm.function_calling import BaseFnCallModel
-from qwen_agent.llm.schema import ASSISTANT, Message
-from qwen_agent.tools.base import BaseTool, register_tool
-from qwen_agent.utils.output_beautify import typewriter_print
+
 
 CFG = json.loads((Path(__file__).parent / "chat_config.json").read_text())
 
@@ -600,7 +602,6 @@ def _archive_previous(query_hint: str = ""):
     """Сохраняет предыдущий draft+notes+plan+synthesis в archive/<timestamp>_<slug>/."""
     if not DRAFT_PATH.exists() and not NOTES_PATH.exists():
         return None
-    from datetime import datetime
     slug = re.sub(r"[^a-zA-Z0-9а-яА-Я]+", "-", query_hint)[:40].strip("-") or "run"
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     dest = ARCHIVE_DIR / f"{stamp}_{slug}"
@@ -629,7 +630,6 @@ def _reset_research(query: str):
     if not QUERYLOG_PATH.exists():
         QUERYLOG_PATH.write_text("# Query log (global, across sessions)\n")
     # Маркер новой сессии в обоих файлах
-    from datetime import datetime
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     with LESSONS_PATH.open("a") as f:
         f.write(f"\n## Session {stamp}: {query}\n")
