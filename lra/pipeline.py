@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -449,6 +450,56 @@ def _normalize_draft_file() -> bool:
     return False
 
 
+def _hitl_review(query: str, writer: Assistant, writer_msgs: list,
+                 valid: int, invalid: list, suspicious: list) -> None:
+    """Human-in-the-loop пауза после validator'а. Печатает превью + метрики и
+    просит пользователя либо утвердить черновик, либо дать комментарий на один
+    дополнительный проход writer'а, либо пропустить.
+
+    Вызывается только если CFG.hitl=True И stdin — TTY (иначе в тестах/resume
+    сломает неинтерактивный запуск).
+    """
+    if not CFG.get("hitl", False) or not sys.stdin.isatty() or not DRAFT_PATH.exists():
+        return
+    print("\n" + "═" * 60)
+    print("🧑 HITL pause-point — отчёт готов, но можно внести правки")
+    print("═" * 60)
+    draft_text = DRAFT_PATH.read_text(encoding="utf-8")
+    preview = draft_text if len(draft_text) < 2000 else draft_text[:1000] + "\n...\n" + draft_text[-800:]
+    print(preview)
+    print("─" * 60)
+    print(f"Метрики: valid={valid}, invalid={len(invalid)}, suspicious={len(suspicious)}, "
+          f"chars={len(draft_text)}")
+    print("Команды: [a] approve как есть  |  [r] revise (попросить writer'а переписать)  "
+          "|  [s] skip (то же что approve)")
+    try:
+        choice = input("Выбор [a/r/s]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("   ⚠️  HITL прерван — принимаем как есть")
+        return
+    if choice.startswith("r"):
+        comment = choice[1:].strip(" :") if len(choice) > 1 else ""
+        if not comment:
+            try:
+                comment = input("Что переписать? ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("   ⚠️  комментарий не введён — принимаем как есть")
+                return
+        if not comment:
+            print("   ⚠️  пустой комментарий — принимаем как есть")
+            return
+        print(f"   🔁 HITL revise: «{comment}» — запускаем один дополнительный writer-pass")
+        writer_msgs.append({"role": "user",
+                            "content": (f"HITL-КОММЕНТАРИЙ от человека по теме «{query}»:\n{comment}\n\n"
+                                        "Перепиши черновик через write_draft + append_draft, "
+                                        "учитывая комментарий. Секции и формат сохраняй.")})
+        writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
+        _normalize_draft_file()
+        print("   ✓ writer переписал draft по HITL-комментарию")
+    else:
+        print("   ✓ HITL approved — финализируем как есть")
+
+
 def _run_critic_round(critic: Assistant, critic_name: str, query: str,
                       user_hint: str, i: int, total: int,
                       prev_critique: str, metrics: RunMetrics) -> tuple[str, bool, bool]:
@@ -623,6 +674,8 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
         if suspicious:
             print(f"   ⚠️  слабое совпадение цитаты с notes: {suspicious}")
             print("       (id существует, но текст вокруг него в draft'е не отражает факты из notes)")
+        # HITL pause-point: даём пользователю шанс ткнуть «перепиши про X» до финализации.
+        _hitl_review(query, writer, writer_msgs, valid, invalid, suspicious)
         metrics.final_draft_chars = DRAFT_PATH.stat().st_size
         print(f"\n📄 Итог: {DRAFT_PATH}\n" + "─" * 60)
         print(DRAFT_PATH.read_text(encoding='utf-8'))

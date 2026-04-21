@@ -58,6 +58,18 @@ class Settings:
         except (AttributeError, KeyError):
             return default
 
+    def __setitem__(self, key: str, value) -> None:
+        """CFG[key] = value — для runtime-флагов (hitl, notes_strict, etc.).
+        Известные поля дата-класса обновляются напрямую, остальное — в extra."""
+        if hasattr(self, key) and key != "extra":
+            setattr(self, key, value)
+        else:
+            self.extra[key] = value
+
+    def pop(self, key: str, default=None):
+        """CFG.pop(key) — удалить runtime-флаг из extra (для тестов)."""
+        return self.extra.pop(key, default)
+
 
 CFG = Settings.load()
 

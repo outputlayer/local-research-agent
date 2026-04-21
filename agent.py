@@ -57,6 +57,7 @@ def main():
     print("✅ Готово. Команды:")
     print("   <тема>              — запустить ресёрч (alias: /research <тема>)")
     print("   /resume             — дописать отчёт из существующих notes/synthesis/kb (без explorer)")
+    print("   /hitl on|off        — переключить human-in-the-loop паузу после валидатора")
     print("   /clean              — очистить рабочую папку (lessons/querylog остаются)")
     print("   /forget             — стереть + глобальную Reflexion-память (archive и cache сохраняются)")
     print("   /reset              — ПОЛНАЯ очистка: research/*, archive/*, .cache/*, run.log")
@@ -75,6 +76,17 @@ def main():
         if q == "/resume":
             resume_research()
             print()
+            continue
+        if q.startswith("/hitl"):
+            arg = q[len("/hitl"):].strip().lower()
+            if arg in ("on", "true", "1", "yes"):
+                CFG["hitl"] = True
+                print("🧑 HITL включён: после валидатора будет пауза с запросом правок\n")
+            elif arg in ("off", "false", "0", "no", ""):
+                CFG["hitl"] = False
+                print("🤖 HITL выключен (автоматический режим)\n")
+            else:
+                print(f"⚠️  неизвестный аргумент: {arg!r}. Используй: /hitl on | /hitl off\n")
             continue
         if q in ("/clean", "/clean-research"):
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH):
