@@ -86,6 +86,55 @@ def _current_focus(query: str) -> str:
     return query
 
 
+def _rotate_focus_fallback(query: str) -> bool:
+    """Программный fallback когда replanner провалился: берём первый [TODO] из plan.md,
+    делаем его новым [FOCUS], перемещаем старый [FOCUS] в [DONE]. Ломает loop
+    «replanner игнорирует write_plan → тот же FOCUS → те же провалы explorer'а».
+    Возвращает True если удалось ротировать, False если [TODO] пуст.
+    """
+    if not PLAN_PATH.exists():
+        return False
+    lines = PLAN_PATH.read_text(encoding='utf-8').splitlines()
+    old_focus = ""
+    todos: list[tuple[int, str]] = []
+    in_todo = False
+    for idx, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("[FOCUS]"):
+            old_focus = s.replace("[FOCUS]", "").strip(" -—:")
+        if s.startswith("## [TODO]"):
+            in_todo = True
+            continue
+        if in_todo and s.startswith("## "):
+            in_todo = False
+        if in_todo and s.startswith("- ") and len(s) > 2:
+            todos.append((idx, s[2:].strip()))
+    if not todos:
+        return False
+    new_idx, new_focus = todos[0]
+    # Удаляем выбранный TODO, заменяем [FOCUS], добавляем старый в [DONE].
+    new_lines = []
+    done_written = False
+    for idx, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("[FOCUS]"):
+            new_lines.append(f"[FOCUS] {new_focus}")
+            continue
+        if idx == new_idx:
+            continue  # выкидываем выбранный TODO
+        if s.startswith("## [DONE]") and old_focus and not done_written:
+            new_lines.append(ln)
+            new_lines.append(f"- {old_focus}")
+            done_written = True
+            continue
+        new_lines.append(ln)
+    if old_focus and not done_written:
+        new_lines.append("\n## [DONE]")
+        new_lines.append(f"- {old_focus}")
+    PLAN_PATH.write_text("\n".join(new_lines) + "\n", encoding='utf-8')
+    return True
+
+
 def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     """Полный пайплайн: explorer/replanner (×depth) → compressor → synthesizer →
     writer/critic (×critic_rounds) → validator цитат."""
@@ -104,6 +153,9 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
 
     print(f"🕳️  Фаза 1: кроличья нора (до {depth} итераций, адаптивный план)")
     low_gain_streak = 0
+    empty_iter_streak = 0  # подряд итераций, где explorer не вырастил notes (grew<100 после retry)
+    stuck_focus_streak = 0  # подряд итераций с тем же FOCUS
+    prev_focus = None
     for i in range(1, depth + 1):
         focus = _current_focus(query)
         print(f"\n── итерация {i}/{depth} ──  🎯 FOCUS: {focus[:80]}")
@@ -162,10 +214,26 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                            "вызови write_plan с новым Digest, новым [FOCUS] и обновлённым [TODO].")}],
                        "🔁")
             plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
+            if plan_text == plan_before:
+                # Replanner провалился оба раза — ротируем FOCUS программно, чтобы не зацикливаться.
+                if _rotate_focus_fallback(query):
+                    print("   🛟 fallback: FOCUS ротирован программно из [TODO]")
+                    plan_text = PLAN_PATH.read_text(encoding='utf-8')
         new_focus = _current_focus(query)
         focus_changed = new_focus != focus
         if focus_changed:
             print(f"   🔀 вектор скорректирован: {focus[:50]} → {new_focus[:50]}")
+
+        # Трекинг застревания: тот же FOCUS подряд + пустой explorer подряд
+        if prev_focus is not None and new_focus == prev_focus:
+            stuck_focus_streak += 1
+        else:
+            stuck_focus_streak = 0
+        prev_focus = new_focus
+        if grew < 100:
+            empty_iter_streak += 1
+        else:
+            empty_iter_streak = 0
 
         metrics.iterations.append(IterationMetric(
             iteration=i, focus=focus[:200],
@@ -186,6 +254,14 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         if "[TODO]" not in plan_text and i > 1:
             print("✅ Нет больше [TODO]")
             metrics.stopped_early_reason = "NO_TODO"
+            break
+        if empty_iter_streak >= 2:
+            print("✅ Ранний стоп: 2 итерации подряд explorer не вырастил notes (агент застрял)")
+            metrics.stopped_early_reason = "EMPTY_ITERATIONS"
+            break
+        if stuck_focus_streak >= 2 and i >= 3:
+            print(f"✅ Ранний стоп: FOCUS не менялся 3 итерации подряд ({prev_focus[:50]})")
+            metrics.stopped_early_reason = "FOCUS_STUCK"
             break
         if low_gain_streak >= 2 and i >= 3:
             print("✅ Ранний стоп: 2 итерации подряд < 2 новых id")
