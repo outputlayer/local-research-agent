@@ -90,6 +90,9 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipeline, "build_bot", fake_build_bot)
     monkeypatch.setattr(pipeline, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(pipeline, "prefetch_iteration",
+                        lambda focus, **kw: {"hf": True, "gh": True, "elapsed": 0.0,
+                                             "hf_cached": True, "gh_cached": True})
 
     # validator НЕ должен лезть в сеть — отключим внешние hf papers info вызовы
     from lra import validator
@@ -146,6 +149,9 @@ def test_research_loop_early_stop_on_plan_complete(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pipeline, "build_bot", fake_build_bot)
     monkeypatch.setattr(pipeline, "_run_agent", fake_run_agent)
+    monkeypatch.setattr(pipeline, "prefetch_iteration",
+                        lambda focus, **kw: {"hf": True, "gh": True, "elapsed": 0.0,
+                                             "hf_cached": True, "gh_cached": True})
     monkeypatch.setattr("lra.validator.validate_draft_ids",
                         lambda **kw: (0, [], []))
 

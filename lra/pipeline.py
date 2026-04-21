@@ -1,18 +1,49 @@
 """Оркестратор пайплайна: explorer ↔ replanner → synthesizer → writer ↔ critic → validator."""
 from __future__ import annotations
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from qwen_agent.agents import Assistant
 from qwen_agent.utils.output_beautify import typewriter_print
 
 # Импорт tools обязателен для @register_tool — не удалять даже если не используется прямо
+from . import cli as cli_run
 from . import tools  # noqa: F401
 from .config import (CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR)
+from .logger import get_logger
 from .memory import reset_research
 from .prompts import (COMPRESSOR_PROMPT, CRITIC_PROMPT, EXPLORER_PROMPT,
                       REPLANNER_PROMPT, SYNTHESIZER_PROMPT, WRITER_PROMPT)
 from .utils import count_arxiv_ids, jaccard, keyword_set
 from .validator import validate_draft_ids
+
+log = get_logger("pipeline")
+
+
+def prefetch_iteration(focus: str, limit: int = 5, hf_timeout: int = 30, gh_timeout: int = 20) -> dict:
+    """Прогревает disk-cache hf_papers + github_search параллельно до запуска explorer-LLM.
+
+    Когда explorer затем вызовет те же команды, они отработают из кеша (~0с вместо
+    ~10-30с каждая). Тихо игнорирует ошибки CLI — это прогрев, не критичная операция.
+    Возвращает {'hf': bool, 'gh': bool, 'elapsed': float} для наблюдаемости.
+    """
+    t0 = time.time()
+    hf_cmd = ["hf", "papers", "search", focus, "--limit", str(limit * 2), "--format", "json"]
+    gh_cmd = ["gh", "search", "repos", focus, "--limit", str(limit),
+              "--json", "fullName,url,description,stargazersCount,language,pushedAt"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_hf = pool.submit(cli_run.run, hf_cmd, timeout=hf_timeout)
+        fut_gh = pool.submit(cli_run.run, gh_cmd, timeout=gh_timeout)
+        r_hf = fut_hf.result()
+        r_gh = fut_gh.result()
+
+    elapsed = time.time() - t0
+    log.info("prefetch '%s': hf=%s gh=%s in %.1fs",
+             focus[:40], "✓" if r_hf.ok else "✗", "✓" if r_gh.ok else "✗", elapsed)
+    return {"hf": r_hf.ok, "gh": r_gh.ok, "elapsed": elapsed,
+            "hf_cached": r_hf.from_cache, "gh_cached": r_gh.from_cache}
 
 
 def build_bot(system_message: str, tool_names: list, max_tokens: Optional[int] = None) -> Assistant:
@@ -68,6 +99,13 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     for i in range(1, depth + 1):
         focus = _current_focus(query)
         print(f"\n── итерация {i}/{depth} ──  🎯 FOCUS: {focus[:80]}")
+        # Прогреваем disk-cache параллельно — hf+gh одновременно, до первого LLM-вызова
+        pf = prefetch_iteration(focus)
+        cached_marks = []
+        if pf["hf_cached"]: cached_marks.append("hf")
+        if pf["gh_cached"]: cached_marks.append("gh")
+        cache_note = f" (из кеша: {','.join(cached_marks)})" if cached_marks else ""
+        print(f"   ⚡ prefetch hf+gh параллельно: {pf['elapsed']:.1f}с{cache_note}")
         ids_before = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         before = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         msg = [{"role": "user",
