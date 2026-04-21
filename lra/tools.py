@@ -285,17 +285,24 @@ class ReadNotesFocused(BaseTool):
             return (f"(0/{len(blocks)} блоков прошли фильтр jaccard>={min_jac} "
                     f"для focus='{focus[:60]}'; рассмотри более широкий порог или read_notes)")
 
-        out_parts: list[str] = []
+        # Сначала собираем фактически вмещающиеся блоки, потом формируем header
+        # (иначе header обещает N блоков, а в budget вмещается M<N — LLM думает
+        # что получила все релевантные блоки)
+        placeholder_header_len = 80  # консервативная оценка для budget
+        budget = max_chars - placeholder_header_len
+        included: list[str] = []
         total = 0
-        header = f"[focus-filter: {len(relevant)}/{len(blocks)} блоков, jaccard>={min_jac}]\n\n"
-        budget = max_chars - len(header)
         for block, score in relevant:
             chunk = f"<!-- score={score:.3f} -->\n{block}\n"
             if total + len(chunk) > budget:
                 break
-            out_parts.append(chunk)
+            included.append(chunk)
             total += len(chunk)
-        return header + "\n".join(out_parts)
+        truncated = len(included) < len(relevant)
+        header = (f"[focus-filter: {len(included)}/{len(blocks)} блоков, "
+                  f"jaccard>={min_jac}"
+                  f"{f', обрезано по max_chars={max_chars}' if truncated else ''}]\n\n")
+        return header + "\n".join(included)
 
 
 @register_tool("write_plan")

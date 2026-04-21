@@ -65,3 +65,27 @@ def test_empty_focus_keywords_fallback(_isolated_notes):
     _isolated_notes.write_text("- [2401.00001] fact about agents\n", encoding="utf-8")
     out = _call("a b c", max_chars=1000)  # все токены <5 букв → keyword_set пуст
     assert "2401.00001" in out
+
+
+def test_header_matches_actually_included_count(_isolated_notes):
+    """Регрессия: header должен отражать реально вошедшие блоки, а не релевантные,
+    иначе LLM думает что получила N блоков, когда budget вместил только M<N."""
+    blocks = [
+        f"- [240{i}.0000{i}] semantic drift workspace agents filter block {i} "
+        + ("wordy " * 30)
+        for i in range(1, 6)
+    ]
+    _isolated_notes.write_text("\n\n".join(blocks), encoding="utf-8")
+    out = _call("semantic drift workspace", max_chars=400, min_jaccard=0.01)
+    included_count = out.count("score=")
+    # header "N/M" — N должно совпасть с фактически вошедшими
+    import re
+    m = re.search(r"(\d+)/(\d+)", out)
+    assert m is not None
+    header_n = int(m.group(1))
+    assert header_n == included_count, (
+        f"header={header_n} but actually included={included_count}"
+    )
+    # При этом должно быть честно указано что обрезано
+    if header_n < 5:
+        assert "обрезано" in out
