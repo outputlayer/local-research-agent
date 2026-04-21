@@ -228,10 +228,19 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         print(f"   📝 notes: +{grew} симв ({after} всего)  📊 новых arxiv-id: {len(new_ids)}")
         if grew < 100:
             print("   ⚠️  заметки не росли — retry со строгим требованием")
+            # Конкретный план действий вместо абстрактного «повтори». Различаем
+            # три причины пустой итерации: (1) дубликат запросов → kb_search,
+            # (2) длинный github-query был заreject'ен → сократить,
+            # (3) задача исчерпана → plan_close_task + следующий TODO.
             retry = [{"role": "user", "content": (
-                f"ПРОВАЛ: ты НЕ вызвал append_notes. Сделай hf_papers по '{focus}' (limit=5) "
-                "и СРАЗУ после этого append_notes с минимум 3 фактами и [arxiv-id]. "
-                "Затем append_lessons одной строкой.")}]
+                f"ПРОВАЛ: итерация пустая (grew={grew}, new_ids=0). Выполни ТОЧНО этот порядок:\n"
+                f"1) kb_search '{focus[:60]}' (k=5) — проверь что уже в базе.\n"
+                f"2) hf_papers с ПЕРЕФОРМУЛИРОВАННЫМ запросом по '{focus[:60]}' "
+                "(смени термины, год, автора — НЕ ту же фразу что в querylog); limit=5.\n"
+                "3) Если и это вернуло дубликат — СРАЗУ append_notes (2-3 факта из kb_search "
+                "результатов) и append_lessons строкой «[iter] исчерпано: <focus>; "
+                "следующий шаг: plan_close_task». Не зацикливайся на github_search.\n"
+                "4) plan_close_task(id=<focus id>, evidence='...', why='исчерпано').")}]
             _run_agent(explorer, retry, "🔁")
             after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
             grew = after - before
@@ -254,8 +263,12 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
             print("   ⚠️  план не обновился — retry")
             _run_agent(replanner,
                        [{"role": "user", "content": (
-                           "ПРОВАЛ: ты НЕ вызвал write_plan. Прочитай read_notes, затем ОБЯЗАТЕЛЬНО "
-                           "вызови write_plan с новым Digest, новым [FOCUS] и обновлённым [TODO].")}],
+                           "ПРОВАЛ: ты НЕ вызвал write_plan. Сейчас: (1) read_notes — "
+                           "посмотри что добавилось за последнюю итерацию, (2) write_plan "
+                           "ОБЯЗАТЕЛЬНО: обнови Digest (3-5 новых пунктов с [arxiv-id]), "
+                           "выставь новый [FOCUS] (берём из [TODO] подтему с МЕНЬШИМ "
+                           "количеством evidence), обнови [TODO]/[DONE]. "
+                           "Формат tool_call arguments — строгий JSON без markdown.")}],
                        "🔁")
             plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
             if plan_text == plan_before:

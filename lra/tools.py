@@ -5,12 +5,24 @@ import json
 import re
 import subprocess
 import sys
+from datetime import UTC
 
 from qwen_agent.tools.base import BaseTool, register_tool
 
 from . import cli as cli_run
 from . import kb as kb_mod
-from .config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
+from .config import (
+    ARXIV_RECENT_DAYS,
+    CFG,
+    DRAFT_PATH,
+    GITHUB_RECENT_DAYS,
+    LESSONS_PATH,
+    MAX_GITHUB_QUERY_WORDS,
+    NOTES_PATH,
+    PLAN_PATH,
+    QUERYLOG_PATH,
+    SYNTHESIS_PATH,
+)
 from .logger import get_logger
 from .memory import ensure_dir, is_similar_to_seen, log_query, seen_queries
 from .utils import extract_ids, normalize_query, parse_args
@@ -95,7 +107,19 @@ class HfPapers(BaseTool):
         if not data:
             return f"нет результатов: {query}"
         data.sort(key=lambda x: x.get("published_at", ""), reverse=True)
-        data = data[:limit]
+        # Freshness: оставляем только papers младше ARXIV_RECENT_DAYS. Если отсечение
+        # выкидывает всё — откатываемся на полный список с пометкой в ответе (лучше
+        # старое, чем ничего).
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now(UTC) - timedelta(days=ARXIV_RECENT_DAYS)).date().isoformat()
+        fresh = [x for x in data if (x.get("published_at") or "")[:10] >= cutoff]
+        stale_note = ""
+        if fresh:
+            data = fresh[:limit]
+        else:
+            data = data[:limit]
+            stale_note = (f"\n\n⚠️  все результаты старше {ARXIV_RECENT_DAYS // 365} лет "
+                          f"(cutoff={cutoff}) — показаны как fallback")
         lines = []
         auto_saved = 0
         for paper in data:
@@ -121,7 +145,7 @@ class HfPapers(BaseTool):
                 except Exception as e:
                     log.debug("kb auto-save paper failed %s: %s", pid, e)
         footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
-        return "\n\n".join(lines) + footer
+        return "\n\n".join(lines) + footer + stale_note
 
 
 @register_tool("run_python")
@@ -512,6 +536,16 @@ class GithubSearch(BaseTool):
         if not cleaned_query:
             return "ошибка: после удаления qualifiers query пустой — пиши 2-4 ключевых слова"
 
+        # Жёсткий ранний reject длинных фраз — gh search почти всегда даёт 0
+        # на 6+ слов, а модель упрямо повторяет их с вариациями.
+        word_count = len([w for w in cleaned_query.split() if len(w) >= 2])
+        if word_count > MAX_GITHUB_QUERY_WORDS:
+            words = cleaned_query.split()
+            short_hint = " ".join(words[:3])
+            return (f"ОТКАЗ: query '{cleaned_query}' слишком длинный ({word_count} слов). "
+                    f"github search плохо работает с длинными фразами — сократи до 2-3 ключевых "
+                    f"терминов (попробуй: '{short_hint}') ИЛИ откажись от github_search для этой "
+                    "подтемы, если она чисто теоретическая.")
         # Объединяем явные параметры и извлечённые из query (явные приоритетнее)
         min_stars = p.get("min_stars")
         if min_stars is None and extracted_min_stars is not None:
@@ -528,8 +562,14 @@ class GithubSearch(BaseTool):
                     "Переформулируй или читай read_notes.")
         fuzzy = is_similar_to_seen(dedup_key)
         if fuzzy and fuzzy != dedup_key:
+            # Конкретный совет вместо «смени тему». kb_search + read_notes почти всегда
+            # лучше пятой переформулировки одного и того же запроса.
             return (f"ОТКАЗ: GitHub-запрос '{cleaned_query}' слишком похож на '{fuzzy}'. "
-                    "Смени тему или переходи к следующему [TODO] — ты крутишься по одному и тому же.")
+                    f"Действия по приоритету: (1) kb_search '{cleaned_query}' — возможно мы уже "
+                    f"это искали и атом лежит в kb; (2) read_notes — поищи что уже записано; "
+                    f"(3) если всё-таки нужен github — выбери другой аспект [FOCUS] "
+                    f"(конкретный метод/датасет, а не саму тему); (4) plan_close_task текущий "
+                    f"[FOCUS] с evidence из notes и переходи к следующему [TODO].")
         log_query(dedup_key)
 
         if search_type == "repos":
@@ -537,18 +577,29 @@ class GithubSearch(BaseTool):
         else:
             fields = "path,url,repository"
 
-        cli_args = ["gh", "search", search_type, cleaned_query,
-                    "--limit", str(limit), "--json", fields]
-        if search_type == "repos":
-            if min_stars is not None:
-                try:
-                    cli_args += ["--stars", f">={int(min_stars)}"]
-                except (TypeError, ValueError):
-                    pass
-            if language:
-                cli_args += ["--language", language]
+        from datetime import datetime, timedelta
+        recent_cutoff = (datetime.now(UTC)
+                         - timedelta(days=GITHUB_RECENT_DAYS)).date().isoformat()
 
-        r = cli_run.run(cli_args, timeout=20)
+        def _build_args(with_freshness: bool) -> list[str]:
+            args = ["gh", "search", search_type, cleaned_query,
+                    "--limit", str(limit), "--json", fields]
+            if search_type == "repos":
+                if min_stars is not None:
+                    try:
+                        args += ["--stars", f">={int(min_stars)}"]
+                    except (TypeError, ValueError):
+                        pass
+                if language:
+                    args += ["--language", language]
+                if with_freshness:
+                    # gh search repos --updated принимает GitHub qualifier syntax
+                    args += ["--updated", f">={recent_cutoff}"]
+            return args
+
+        # Сначала ищем в свежем окне; если 0 — повторяем без фильтра с пометкой.
+        stale_note = ""
+        r = cli_run.run(_build_args(with_freshness=(search_type == "repos")), timeout=20)
         if r.returncode == 127:
             return "ошибка: `gh` CLI не найден в PATH (установи: brew install gh)"
         if r.returncode == 124:
@@ -562,6 +613,18 @@ class GithubSearch(BaseTool):
             data = json.loads(r.stdout)
         except Exception:
             return f"не удалось распарсить JSON: {r.stdout[:300]}"
+        # Если freshness-фильтр выкинул всё — повторяем без него и помечаем.
+        if not data and search_type == "repos":
+            r2 = cli_run.run(_build_args(with_freshness=False), timeout=20)
+            if r2.ok:
+                try:
+                    data2 = json.loads(r2.stdout)
+                except Exception:
+                    data2 = []
+                if data2:
+                    data = data2
+                    stale_note = (f"\n\n⚠️  свежих репо (updated >= {recent_cutoff}) нет — "
+                                  f"показаны более старые результаты как fallback")
         if not data:
             hint = ""
             if len(cleaned_query.split()) >= 4:
@@ -579,8 +642,7 @@ class GithubSearch(BaseTool):
             auto_saved = 0
 
         footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
-        return "\n\n".join(lines) + footer
-
+        return "\n\n".join(lines) + footer + stale_note
 
 @register_tool("kb_add")
 class KbAdd(BaseTool):

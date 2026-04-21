@@ -163,12 +163,30 @@ def test_empty_query_after_stripping_qualifiers_returns_error(gh_tool, monkeypat
     assert "пустой" in out.lower() or "ошибка" in out.lower()
 
 
-def test_no_results_hint_for_long_query(gh_tool, monkeypatch):
+def test_long_query_rejected_before_network(gh_tool, monkeypatch):
+    """Длинные (>MAX_GITHUB_QUERY_WORDS) запросы реджектятся до похода в gh CLI."""
     tool, tools_mod, _ = gh_tool
-    monkeypatch.setattr(tools_mod.cli_run, "run", _ok("[]"))
+    called = {"n": 0}
+
+    def _counter(argv, timeout=None):
+        called["n"] += 1
+        return _ok("[]")(argv, timeout=timeout)
+
+    monkeypatch.setattr(tools_mod.cli_run, "run", _counter)
     out = tool.call({
         "query": "LangGraph multi-agent orchestration state machine workflow",
         "type": "repos",
     })
-    assert "нет результатов" in out.lower()
-    assert "сократи" in out.lower()
+    assert called["n"] == 0, "длинный query не должен вызывать gh CLI"
+    assert "отказ" in out.lower()
+    assert "слишком длинный" in out.lower()
+    # Должна быть конкретная подсказка — сокращённый вариант
+    assert "langgraph" in out.lower()
+
+
+def test_short_query_zero_results_still_works(gh_tool, monkeypatch):
+    """После reject длинных — короткий query с нулём результатов всё ещё даёт hint."""
+    tool, tools_mod, _ = gh_tool
+    monkeypatch.setattr(tools_mod.cli_run, "run", _ok("[]"))
+    out = tool.call({"query": "langgraph orchestration", "type": "repos"})
+    assert "нет результатов" in out.lower() or "отказ" in out.lower()

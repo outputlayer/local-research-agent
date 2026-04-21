@@ -270,13 +270,21 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
     focus_t = plan.focus_task()
     focus_line = f"[FOCUS] {focus_t.title}" if focus_t else f"[FOCUS] {plan.root_goal}"
 
+    todo = [t for t in plan.tasks if t.status == "open"]
+    in_prog = [t for t in plan.tasks if t.status == "in_progress"]
+    done = [t for t in plan.tasks if t.status == "done"]
+    blocked = [t for t in plan.tasks if t.status == "blocked"]
+    total = len(plan.tasks)
+    pct = int(100 * len(done) / total) if total else 0
+
     lines = [
         f"# Plan: {plan.root_goal}",
         "",
         focus_line,
         "",
-        f"_(структурированный источник: plan.json, {len(plan.tasks)} задач, "
-        f"{len(plan.open_tasks())} open / {len(plan.revisions)} ревизий)_",
+        f"**Прогресс: {len(done)}/{total} done ({pct}%)** · "
+        f"open={len(todo)} · in_progress={len(in_prog)} · blocked={len(blocked)} · "
+        f"ревизий={len(plan.revisions)}",
         "",
     ]
 
@@ -287,11 +295,6 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
         for r in last_rev:
             lines.append(f"- iter {r.iter}: {r.action} {r.target} — {r.why}")
         lines.append("")
-
-    todo = [t for t in plan.tasks if t.status == "open"]
-    in_prog = [t for t in plan.tasks if t.status == "in_progress"]
-    done = [t for t in plan.tasks if t.status == "done"]
-    blocked = [t for t in plan.tasks if t.status == "blocked"]
 
     if in_prog:
         lines.append("## [IN_PROGRESS]")
@@ -314,7 +317,8 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
     if done:
         lines.append("## [DONE]")
         for t in done:
-            lines.append(f"- [{t.id}] {t.title}")
+            evidence = f"  _(evidence={len(t.evidence_refs)})_" if t.evidence_refs else ""
+            lines.append(f"- [{t.id}] {t.title}{evidence}")
         lines.append("")
 
     if blocked:

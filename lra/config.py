@@ -84,3 +84,13 @@ RUN_LOG_PATH = RESEARCH_DIR / "run.log"
 # Reflexion-память ГЛОБАЛЬНА — живёт между сессиями, не стирается при новом запросе
 LESSONS_PATH = RESEARCH_DIR / "lessons.md"
 QUERYLOG_PATH = RESEARCH_DIR / "querylog.md"
+
+# ── Freshness knobs ────────────────────────────────────────────────────────
+# Порог актуальности: GitHub — год, arxiv — два. Старые записи не игнорируем
+# намертво (fallback отдаёт топ с пометкой "устарело"), но в первом проходе
+# отсекаем всё что свежее порога.
+GITHUB_RECENT_DAYS = 365
+ARXIV_RECENT_DAYS = 730
+# github_search с длинным query (>5 значащих слов) почти всегда даёт 0 —
+# реджектим на входе и просим модель сократить.
+MAX_GITHUB_QUERY_WORDS = 5
