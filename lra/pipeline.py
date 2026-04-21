@@ -9,6 +9,7 @@ from qwen_agent.utils.output_beautify import typewriter_print
 
 # Импорт tools обязателен для @register_tool — не удалять даже если не используется прямо
 from . import cli as cli_run
+from . import kb as kb_mod
 from . import tools  # noqa: F401
 from .config import CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR
 from .logger import get_logger
@@ -145,7 +146,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     explorer = build_bot(EXPLORER_PROMPT,
                          ["hf_papers", "github_search",
                           "read_plan", "read_notes", "append_notes",
-                          "read_lessons", "append_lessons", "read_querylog"],
+                          "read_lessons", "append_lessons", "read_querylog",
+                          "kb_add", "kb_search"],
                          max_tokens=3072)
     replanner = build_bot(REPLANNER_PROMPT,
                           ["read_notes", "read_plan", "write_plan"],
@@ -170,11 +172,17 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         print(f"   ⚡ prefetch hf+gh параллельно: {pf['elapsed']:.1f}с{cache_note}")
         ids_before = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         before = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
+        # Инжектим в сообщение explorer'а top-3 атома из KB, релевантных FOCUS'у —
+        # это даёт постоянный контекст поверх read_notes (который режется на 20k симв).
+        kb_context = kb_mod.format_atoms(kb_mod.search(focus, k=3))
+        kb_block = f"\n\nУже известно по схожим темам (KB top-3):\n{kb_context}\n" if kb_context else ""
         t_exp = time.time()
         msg = [{"role": "user",
                 "content": f"Исходная тема: {query}\n"
-                           f"Текущий [FOCUS] из plan.md: {focus}\n"
-                           "Сделай одну итерацию по [FOCUS]. ОБЯЗАТЕЛЬНО append_notes и append_lessons."}]
+                           f"Текущий [FOCUS] из plan.md: {focus}{kb_block}\n"
+                           "Сделай одну итерацию по [FOCUS]. ОБЯЗАТЕЛЬНО append_notes и append_lessons. "
+                           "Для КАЖДОЙ новой статьи/репозитория вызови kb_add — это нужно для поиска "
+                           "по накопленному знанию на будущих итерациях."}]
         _run_agent(explorer, msg, "🔎")
         explorer_seconds = time.time() - t_exp
         after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
@@ -278,7 +286,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     # Фаза 2.0 — синтез
     print("\n💡 Фаза 2.0: синтезатор (мосты/противоречия/пробелы/экстраполяция/testable)")
     synthesizer = build_bot(SYNTHESIZER_PROMPT,
-                            ["read_plan", "read_notes", "write_synthesis", "run_python"],
+                            ["read_plan", "read_notes", "write_synthesis", "run_python",
+                             "kb_search"],
                             max_tokens=4096)
     t_syn = time.time()
     _run_agent(synthesizer,

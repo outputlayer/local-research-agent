@@ -8,8 +8,8 @@ import pytest
 
 
 def _patch_paths(monkeypatch, tmp_path):
-    """Перенаправляет ВСЕ path-ссылки (config/memory/tools/pipeline/validator/metrics) в tmp_path."""
-    from lra import config, memory, metrics, pipeline, tools, validator
+    """Перенаправляет ВСЕ path-ссылки (config/memory/tools/pipeline/validator/metrics/kb) в tmp_path."""
+    from lra import config, kb, memory, metrics, pipeline, tools, validator
     paths = {
         "RESEARCH_DIR": tmp_path,
         "ARCHIVE_DIR": tmp_path / "archive",
@@ -20,8 +20,9 @@ def _patch_paths(monkeypatch, tmp_path):
         "LESSONS_PATH": tmp_path / "lessons.md",
         "QUERYLOG_PATH": tmp_path / "querylog.md",
         "METRICS_PATH": tmp_path / "metrics.json",
+        "KB_PATH": tmp_path / "kb.jsonl",
     }
-    for mod in (config, memory, tools, pipeline, validator, metrics):
+    for mod in (config, memory, tools, pipeline, validator, metrics, kb):
         for name, path in paths.items():
             if hasattr(mod, name):
                 monkeypatch.setattr(mod, name, path)

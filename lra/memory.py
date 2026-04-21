@@ -14,6 +14,7 @@ from .config import (
     RESEARCH_DIR,
     SYNTHESIS_PATH,
 )
+from .kb import KB_PATH
 from .utils import normalize_query
 
 
@@ -45,7 +46,7 @@ def archive_previous(query_hint: str = ""):
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     dest = ARCHIVE_DIR / f"{stamp}_{slug}"
     dest.mkdir(parents=True, exist_ok=True)
-    for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH):
+    for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH):
         if p.exists():
             (dest / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
     return dest
@@ -60,7 +61,7 @@ def reset_research(query: str):
     archived = archive_previous(query)
     if archived:
         print(f"📦 Прошлый прогон сохранён: {archived.relative_to(RESEARCH_DIR.parent)}")
-    for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH):
+    for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH):
         p.unlink(missing_ok=True)
     NOTES_PATH.write_text(f"# Notes: {query}\n", encoding="utf-8")
     if not LESSONS_PATH.exists():

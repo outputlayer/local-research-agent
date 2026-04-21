@@ -6,6 +6,7 @@ import shutil
 import subprocess
 
 from lra.config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
+from lra.kb import KB_PATH
 from lra.llm import get_mlx
 from lra.pipeline import research_loop
 
@@ -57,12 +58,12 @@ def main():
         if q == "/exit":
             return
         if q in ("/clean", "/clean-research"):
-            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH):
+            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH):
                 p.unlink(missing_ok=True)
             print("🗑️  research/ очищена (lessons/querylog сохранены — глобальная память)\n")
             continue
         if q == "/forget":
-            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH,
+            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH,
                       LESSONS_PATH, QUERYLOG_PATH):
                 p.unlink(missing_ok=True)
             print("🧠  Всё стёрто, включая глобальные lessons/querylog\n")

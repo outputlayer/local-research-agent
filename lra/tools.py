@@ -8,6 +8,7 @@ import sys
 from qwen_agent.tools.base import BaseTool, register_tool
 
 from . import cli as cli_run
+from . import kb as kb_mod
 from .config import DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
 from .logger import get_logger
 from .memory import ensure_dir, log_query, seen_queries
@@ -349,4 +350,72 @@ class GithubSearch(BaseTool):
                 lines.append(f"[{repo}] {path}\n  {url}")
 
         return "\n\n".join(lines)
+
+
+@register_tool("kb_add")
+class KbAdd(BaseTool):
+    description = (
+        "Добавляет атом знания в структурированную базу research/kb.jsonl. "
+        "Вызывай каждый раз, когда узнал НОВЫЙ факт/репозиторий/авторов. "
+        "Это параллельно append_notes, но для программного поиска. "
+        "kind: 'paper' (для arxiv-id) или 'repo' (для owner/name). "
+        "claim: 1-3 предложения что именно узнал."
+    )
+    parameters = [
+        {"name": "id", "type": "string", "description": "arxiv-id или owner/name", "required": True},
+        {"name": "kind", "type": "string", "description": "'paper' или 'repo'", "required": True},
+        {"name": "claim", "type": "string", "description": "1-3 предложения о сути", "required": True},
+        {"name": "title", "type": "string", "description": "заголовок/название", "required": False},
+        {"name": "authors", "type": "string", "description": "авторы (для paper)", "required": False},
+        {"name": "url", "type": "string", "description": "ссылка", "required": False},
+        {"name": "stars", "type": "integer", "description": "звёзды (для repo)", "required": False},
+        {"name": "lang", "type": "string", "description": "язык (для repo)", "required": False},
+        {"name": "topic", "type": "string", "description": "текущий FOCUS", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        ensure_dir()
+        p = parse_args(params)
+        kind = (p.get("kind") or "").strip().lower()
+        if kind not in ("paper", "repo"):
+            return "ошибка: kind должен быть 'paper' или 'repo'"
+        if not p.get("id") or not p.get("claim"):
+            return "ошибка: id и claim обязательны"
+        atom = kb_mod.Atom(
+            id=p["id"].strip(),
+            kind=kind,
+            topic=(p.get("topic") or "").strip(),
+            claim=p["claim"].strip(),
+            title=(p.get("title") or "").strip(),
+            authors=(p.get("authors") or "").strip(),
+            url=(p.get("url") or "").strip(),
+            stars=int(p.get("stars", 0) or 0),
+            lang=(p.get("lang") or "").strip(),
+        )
+        kb_mod.add(atom)
+        return f"kb += {kind}:{atom.id}"
+
+
+@register_tool("kb_search")
+class KbSearch(BaseTool):
+    description = (
+        "Ищет в research/kb.jsonl уже известные факты/репо по запросу (BM25). "
+        "Используй ПЕРЕД тем как делать новый hf_papers/github_search — вдруг мы уже это знаем. "
+        "Возвращает top-k атомов с id, title и claim."
+    )
+    parameters = [
+        {"name": "query", "type": "string", "description": "запрос на естественном языке", "required": True},
+        {"name": "k", "type": "integer", "description": "сколько результатов (1-10)", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        query = (p.get("query") or "").strip()
+        if not query:
+            return "ошибка: query обязателен"
+        k = max(1, min(int(p.get("k", 5)), 10))
+        hits = kb_mod.search(query, k=k)
+        if not hits:
+            return "(в kb пока ничего релевантного)"
+        return kb_mod.format_atoms(hits)
 
