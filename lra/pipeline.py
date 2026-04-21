@@ -350,6 +350,23 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     metrics.writer_seconds = time.time() - t_wr
     writer_msgs.extend(resp)
 
+    # Sanity-check: writer должен был вызвать write_draft. Если файл не создан или <200 симв —
+    # retry со строгим сообщением. Без этого критик будет зря крутиться на пустоте.
+    def _draft_too_small() -> bool:
+        return not DRAFT_PATH.exists() or DRAFT_PATH.stat().st_size < 200
+
+    if _draft_too_small():
+        print("   ⚠️  writer не сохранил draft (или <200 симв) — retry со строгим сообщением")
+        writer_msgs.append({"role": "user", "content": (
+            "ПРОВАЛ: ты НЕ вызвал write_draft (либо получился слишком короткий черновик). "
+            "СЕЙЧАС же вызови write_draft с заголовком и '## Краткий ответ' (3-6 булетов "
+            "с [id] из KB context выше), затем append_draft для остальных секций по порядку: "
+            "'## Подходы', '## Бенчмарки и метрики', '## Реализации', '## Ключевые инсайты' "
+            "(6 тегов из synthesis.md), '## Открытые вопросы', '## Источники'. "
+            "НЕ отвечай текстом — используй инструменты.")})
+        resp = _run_agent(writer, writer_msgs, "🔁")
+        writer_msgs.extend(resp)
+
     # Фаза 3 — critic с конвергенцией
     print(f"\n🔍 Фаза 3: критик ({critic_rounds} раунд(ов))")
     critic = build_bot(CRITIC_PROMPT,
@@ -358,20 +375,34 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     prev_critique = ""
     for i in range(1, critic_rounds + 1):
         print(f"\n── критика {i}/{critic_rounds} ──")
+        # Если draft всё ещё пустой — критик бесполезен, но дадим ему шанс вскрыть это
+        # через тулы. Явно инструктируем использовать read_draft/read_notes/read_synthesis
+        # (наблюдали кейс когда критик забывал про тулы и просил текст в чат).
         t_cr = time.time()
         c_resp = _run_agent(critic,
-                            [{"role": "user", "content": f"Оцени черновик по теме: {query}"}],
+                            [{"role": "user", "content": (
+                                f"Оцени черновик по теме: {query}\n\n"
+                                "ОБЯЗАТЕЛЬНО сначала вызови read_draft, потом read_notes и "
+                                "read_synthesis — у тебя ЕСТЬ эти инструменты. Не проси "
+                                "прислать текст, не отвечай 'нет доступа к файлам'. "
+                                "После чтения — либо список до 5 правок по формату из system-prompt, "
+                                "либо ровно слово APPROVED на отдельной строке.")}],
                             "🔍")
         c_seconds = time.time() - t_cr
         critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
         issues = count_critic_issues(critique)
-        # APPROVED: либо явное слово БЕЗ перечисленных правок, либо 0 структурных правок
-        # (закрывает кейс когда критик ответил 'замечаний нет' другими словами).
-        approved = issues == 0 and (
-            "APPROVED" in critique.upper() or len(critique) < 200
-        )
+        # APPROVED валидно ТОЛЬКО если:
+        #   - draft.md существует и непустой (иначе критик галлюцинирует)
+        #   - критик вернул короткий ответ с APPROVED как финальное слово (не в середине объяснения)
+        #   - 0 структурных правок
+        draft_ok = DRAFT_PATH.exists() and DRAFT_PATH.stat().st_size >= 200
+        # "APPROVED" должно быть отдельным словом в последних 50 символах ответа
+        # (чтобы не ловить упоминание в середине текста вроде «ответь APPROVED если...»)
+        tail = critique[-80:].upper().strip()
+        approved_keyword = tail.endswith("APPROVED") or tail == "APPROVED"
+        approved = draft_ok and issues == 0 and approved_keyword
         converged = False
-        print(f"   📋 правок у критика: {issues}")
+        print(f"   📋 правок у критика: {issues}  (draft_ok={draft_ok})")
         if approved:
             metrics.critic_rounds.append(CriticRound(round=i, issues_found=0, approved=True, seconds=c_seconds))
             print("✅ критик одобрил")
