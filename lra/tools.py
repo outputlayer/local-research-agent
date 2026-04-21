@@ -458,6 +458,117 @@ class KbSearch(BaseTool):
         return kb_mod.format_atoms(hits)
 
 
+# ── Структурированный план: явные мутации через тулы ───────────────────────
+# Единственный легитимный способ модели менять структуру plan.json. Каждый
+# вызов пишется в revisions как аудит-лог.
+from . import plan as plan_mod  # noqa: E402
+
+
+def _require_plan() -> plan_mod.Plan:
+    p = plan_mod.load()
+    if not p:
+        raise RuntimeError("plan.json отсутствует — сначала запусти новый ресёрч")
+    return p
+
+
+@register_tool("plan_add_task")
+class PlanAddTask(BaseTool):
+    description = (
+        "Добавить новую под-задачу в план. Используй когда в ходе ресёрча всплыла ВАЖНАЯ "
+        "под-тема, которой нет в исходном плане (origin=emerged). parent опционален — "
+        "если указан id существующей задачи, новая станет её потомком (2-й уровень дерева). "
+        "Лимит: MAX_OPEN_TASKS=8 открытых задач, переполнение → ошибка."
+    )
+    parameters = [
+        {"name": "title", "type": "string", "description": "Краткое название задачи", "required": True},
+        {"name": "parent", "type": "string", "description": "id родителя (T1/T2.3/...) или пусто", "required": False},
+        {"name": "why", "type": "string", "description": "Почему эту задачу добавляем (для аудита)", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        title = (p.get("title") or "").strip()
+        if not title:
+            return "ошибка: title обязателен"
+        parent = (p.get("parent") or "").strip() or None
+        why = (p.get("why") or "").strip()
+        try:
+            plan = _require_plan()
+            task = plan.add_task(title, parent=parent, origin="emerged",
+                                 iter_=0, why=why or "модель решила расширить план")
+            plan_mod.save(plan)
+            return (f"добавлено: [{task.id}] {task.title}"
+                    f"{' (parent=' + parent + ')' if parent else ''} — {len(plan.open_tasks())}/"
+                    f"{plan_mod.MAX_OPEN_TASKS} open")
+        except Exception as e:
+            return f"ошибка: {e}"
+
+
+@register_tool("plan_close_task")
+class PlanCloseTask(BaseTool):
+    description = (
+        "Пометить задачу как выполненную (status=done). Используй когда по под-теме "
+        "собраны достаточные факты в notes/kb. Укажи evidence — список ключей из kb "
+        "или arxiv-id из notes, подтверждающих закрытие."
+    )
+    parameters = [
+        {"name": "id", "type": "string", "description": "id задачи (например, T2 или T2.1)", "required": True},
+        {"name": "evidence", "type": "string",
+         "description": "Через запятую: ключи kb (kb:PaperId) или arxiv-id (2309.12345)", "required": False},
+        {"name": "why", "type": "string", "description": "Краткое резюме что нашли", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        tid = (p.get("id") or "").strip()
+        if not tid:
+            return "ошибка: id обязателен"
+        evidence_raw = (p.get("evidence") or "").strip()
+        evidence = [e.strip() for e in evidence_raw.split(",") if e.strip()] if evidence_raw else []
+        why = (p.get("why") or "").strip()
+        try:
+            plan = _require_plan()
+            t = plan.close_task(tid, iter_=0, evidence=evidence, why=why or "закрыта моделью")
+            plan_mod.save(plan)
+            return f"закрыто: [{t.id}] {t.title}  evidence={len(t.evidence_refs)}"
+        except Exception as e:
+            return f"ошибка: {e}"
+
+
+@register_tool("plan_split_task")
+class PlanSplitTask(BaseTool):
+    description = (
+        "Декомпозировать задачу на 2-4 подзадачи. Используй когда задача оказалась "
+        "слишком широкой и её нельзя закрыть одной итерацией. Исходная задача "
+        "становится контейнером (status=dropped + split-container), подзадачи — "
+        "её детьми в дереве."
+    )
+    parameters = [
+        {"name": "id", "type": "string", "description": "id задачи для декомпозиции", "required": True},
+        {"name": "subtitles", "type": "string",
+         "description": "Подзадачи через ' | ' (минимум 2)", "required": True},
+        {"name": "why", "type": "string", "description": "Почему разделяем", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        tid = (p.get("id") or "").strip()
+        raw = (p.get("subtitles") or "").strip()
+        if not tid or not raw:
+            return "ошибка: id и subtitles обязательны"
+        subs = [s.strip() for s in raw.split("|") if s.strip()]
+        if len(subs) < 2:
+            return "ошибка: нужно минимум 2 подзадачи (разделитель ' | ')"
+        why = (p.get("why") or "").strip()
+        try:
+            plan = _require_plan()
+            children = plan.split_task(tid, subs, iter_=0, why=why or "декомпозиция моделью")
+            plan_mod.save(plan)
+            return f"разбито [{tid}] → " + ", ".join(f"[{c.id}] {c.title[:40]}" for c in children)
+        except Exception as e:
+            return f"ошибка: {e}"
+
+
 # ── Унифицированный [TOOL_CALL] лог для всех тулов ─────────────────────────
 def _wrap_with_logging(cls):
     """Оборачивает `cls.call`, чтобы каждый вызов попадал в лог единообразно."""

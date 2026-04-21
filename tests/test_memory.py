@@ -7,7 +7,7 @@ import pytest
 @pytest.fixture
 def mem(tmp_path, monkeypatch):
     """Перенаправляет все пути в tmp_path и перезагружает модуль memory."""
-    from lra import config, memory
+    from lra import config, memory, plan
     monkeypatch.setattr(config, "RESEARCH_DIR", tmp_path)
     monkeypatch.setattr(config, "ARCHIVE_DIR", tmp_path / "archive")
     monkeypatch.setattr(config, "DRAFT_PATH", tmp_path / "draft.md")
@@ -16,6 +16,10 @@ def mem(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SYNTHESIS_PATH", tmp_path / "synthesis.md")
     monkeypatch.setattr(config, "LESSONS_PATH", tmp_path / "lessons.md")
     monkeypatch.setattr(config, "QUERYLOG_PATH", tmp_path / "querylog.md")
+    # plan.py биндит PLAN_PATH/PLAN_JSON_PATH/RESEARCH_DIR на import-time — патчим явно
+    monkeypatch.setattr(plan, "PLAN_PATH", tmp_path / "plan.md")
+    monkeypatch.setattr(plan, "PLAN_JSON_PATH", tmp_path / "plan.json")
+    monkeypatch.setattr(plan, "RESEARCH_DIR", tmp_path)
     # memory импортировал пути ПО ЗНАЧЕНИЮ на момент загрузки — перезагружаем
     importlib.reload(memory)
     return memory, tmp_path

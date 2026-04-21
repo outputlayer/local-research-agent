@@ -21,6 +21,7 @@ from lra.config import (
 from lra.kb import KB_PATH
 from lra.llm import get_mlx
 from lra.pipeline import research_loop
+from lra.plan import PLAN_JSON_PATH
 
 
 def _check_clis():
@@ -71,12 +72,12 @@ def main():
         if q == "/exit":
             return
         if q in ("/clean", "/clean-research"):
-            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH):
+            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH):
                 p.unlink(missing_ok=True)
             print("🗑️  research/ очищена (lessons/querylog/archive сохранены)\n")
             continue
         if q == "/forget":
-            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH,
+            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH,
                       LESSONS_PATH, QUERYLOG_PATH):
                 p.unlink(missing_ok=True)
             print("🧠  Стёрто + глобальные lessons/querylog (archive и cache остаются)\n")
@@ -90,7 +91,7 @@ def main():
                 print("❌ отменено\n")
                 continue
             # файлы
-            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH,
+            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH,
                       LESSONS_PATH, QUERYLOG_PATH, RUN_LOG_PATH):
                 p.unlink(missing_ok=True)
             # поддиректории

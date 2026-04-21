@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from . import plan as plan_mod
 from .config import (
     ARCHIVE_DIR,
     DRAFT_PATH,
@@ -93,6 +94,8 @@ def reset_research(query: str):
         print(f"📦 Прошлый прогон сохранён: {archived.relative_to(RESEARCH_DIR.parent)}")
     for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, KB_PATH):
         p.unlink(missing_ok=True)
+    # plan.json — источник истины для плана; plan.md рендерится автоматически
+    plan_mod.PLAN_JSON_PATH.unlink(missing_ok=True)
     NOTES_PATH.write_text(f"# Notes: {query}\n", encoding="utf-8")
     if not LESSONS_PATH.exists():
         LESSONS_PATH.write_text("# Lessons (global, across sessions)\n", encoding="utf-8")
@@ -103,15 +106,5 @@ def reset_research(query: str):
         f.write(f"\n## Session {stamp}: {query}\n")
     with QUERYLOG_PATH.open("a", encoding="utf-8") as f:
         f.write(f"\n## Session {stamp}: {query}\n")
-    PLAN_PATH.write_text(
-        f"# Plan: {query}\n\n"
-        f"[FOCUS] {query} — обзор архитектур и ключевых работ\n\n"
-        "## Digest\n(пока пусто — первая итерация)\n\n"
-        "## Direction check\n(будет обновлено replanner'ом)\n\n"
-        "## [TODO]\n"
-        f"- {query}: обзорные статьи\n"
-        f"- {query}: ключевые методы\n"
-        f"- {query}: ограничения и открытые вопросы\n\n"
-        "## [DONE]\n",
-        encoding="utf-8",
-    )
+    # Инициализируем структурированный план (plan.json) + рендер plan.md через plan.reset()
+    plan_mod.reset(query)

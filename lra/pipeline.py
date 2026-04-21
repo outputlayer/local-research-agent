@@ -10,6 +10,7 @@ from qwen_agent.utils.output_beautify import typewriter_print
 # Импорт tools обязателен для @register_tool — не удалять даже если не используется прямо
 from . import cli as cli_run
 from . import kb as kb_mod
+from . import plan as plan_mod
 from . import tools  # noqa: F401
 from .config import CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR
 from .logger import get_logger
@@ -79,6 +80,15 @@ def _run_agent(bot: Assistant, messages: list, icon: str) -> list:
 
 
 def _current_focus(query: str) -> str:
+    """Фокус берётся из plan.json (источник истины). Если его нет (legacy или
+    plan.json повреждён), fallback — parsing plan.md.
+    """
+    plan = plan_mod.load()
+    if plan:
+        focus = plan.focus_task()
+        if focus:
+            return focus.title
+        return query
     if not PLAN_PATH.exists():
         return query
     for line in PLAN_PATH.read_text(encoding='utf-8').splitlines():
@@ -88,51 +98,24 @@ def _current_focus(query: str) -> str:
 
 
 def _rotate_focus_fallback(query: str) -> bool:
-    """Программный fallback когда replanner провалился: берём первый [TODO] из plan.md,
-    делаем его новым [FOCUS], перемещаем старый [FOCUS] в [DONE]. Ломает loop
-    «replanner игнорирует write_plan → тот же FOCUS → те же провалы explorer'а».
-    Возвращает True если удалось ротировать, False если [TODO] пуст.
+    """Программная ротация фокуса через plan.json. Закрывает текущий focus как dropped
+    (если он ещё открыт) и ставит фокус на первую open-задачу. Возвращает True если удалось.
     """
-    if not PLAN_PATH.exists():
+    plan = plan_mod.load()
+    if not plan:
         return False
-    lines = PLAN_PATH.read_text(encoding='utf-8').splitlines()
-    old_focus = ""
-    todos: list[tuple[int, str]] = []
-    in_todo = False
-    for idx, ln in enumerate(lines):
-        s = ln.strip()
-        if s.startswith("[FOCUS]"):
-            old_focus = s.replace("[FOCUS]", "").strip(" -—:")
-        if s.startswith("## [TODO]"):
-            in_todo = True
-            continue
-        if in_todo and s.startswith("## "):
-            in_todo = False
-        if in_todo and s.startswith("- ") and len(s) > 2:
-            todos.append((idx, s[2:].strip()))
-    if not todos:
+    if plan.current_focus_id:
+        # помечаем как заблокированный — replanner провалился на нём
+        t = plan.get(plan.current_focus_id)
+        if t and t.status == "in_progress":
+            plan.block_task(t.id, why="replanner провалился дважды, ротируем")
+        plan.current_focus_id = None
+    next_t = next((t for t in plan.tasks if t.status == "open"), None)
+    if not next_t:
+        plan_mod.save(plan)
         return False
-    new_idx, new_focus = todos[0]
-    # Удаляем выбранный TODO, заменяем [FOCUS], добавляем старый в [DONE].
-    new_lines = []
-    done_written = False
-    for idx, ln in enumerate(lines):
-        s = ln.strip()
-        if s.startswith("[FOCUS]"):
-            new_lines.append(f"[FOCUS] {new_focus}")
-            continue
-        if idx == new_idx:
-            continue  # выкидываем выбранный TODO
-        if s.startswith("## [DONE]") and old_focus and not done_written:
-            new_lines.append(ln)
-            new_lines.append(f"- {old_focus}")
-            done_written = True
-            continue
-        new_lines.append(ln)
-    if old_focus and not done_written:
-        new_lines.append("\n## [DONE]")
-        new_lines.append(f"- {old_focus}")
-    PLAN_PATH.write_text("\n".join(new_lines) + "\n", encoding='utf-8')
+    plan.set_focus(next_t.id, why="fallback ротация после провала replanner'а")
+    plan_mod.save(plan)
     return True
 
 
@@ -147,7 +130,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                          ["hf_papers", "github_search",
                           "read_plan", "read_notes", "append_notes",
                           "read_lessons", "append_lessons", "read_querylog",
-                          "kb_add", "kb_search"],
+                          "kb_add", "kb_search",
+                          "plan_add_task", "plan_close_task", "plan_split_task"],
                          max_tokens=3072)
     replanner = build_bot(REPLANNER_PROMPT,
                           ["read_notes", "read_plan", "write_plan"],
@@ -227,6 +211,12 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                 if _rotate_focus_fallback(query):
                     print("   🛟 fallback: FOCUS ротирован программно из [TODO]")
                     plan_text = PLAN_PATH.read_text(encoding='utf-8')
+        # Если replanner выставил новый [FOCUS] через write_plan (legacy-путь),
+        # синхронизируем plan.json — иначе источник истины разъедется с plan.md.
+        _plan = plan_mod.load()
+        if _plan and plan_text:
+            if plan_mod.sync_focus_from_md(_plan, plan_text, iter_=i):
+                plan_mod.save(_plan)
         new_focus = _current_focus(query)
         focus_changed = new_focus != focus
         if focus_changed:
@@ -242,6 +232,34 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
             empty_iter_streak += 1
         else:
             empty_iter_streak = 0
+
+        # ── Детерминированный guard: инкрементирует attempts, блокирует исчерпанные
+        # задачи, авто-ротирует фокус, сигналит HALT если все задачи закрыты/заблокированы.
+        _plan = plan_mod.load()
+        if _plan:
+            rep = plan_mod.guard(
+                _plan, iter_=i,
+                notes_grew=grew, new_ids=len(new_ids),
+                focus_unchanged_streak=stuck_focus_streak,
+                empty_iter_streak=empty_iter_streak,
+            )
+            if rep.blocked_ids or rep.rotated_focus or rep.warnings:
+                print(f"   🛡️  guard: {rep.summary()}")
+            if rep.halt:
+                print(f"✅ Ранний стоп: guard сообщил {rep.halt_reason}")
+                metrics.stopped_early_reason = f"GUARD_{rep.halt_reason}"
+                metrics.iterations.append(IterationMetric(
+                    iteration=i, focus=focus[:200],
+                    prefetch_seconds=pf["elapsed"],
+                    explorer_seconds=explorer_seconds,
+                    replanner_seconds=replanner_seconds,
+                    notes_grew_chars=grew,
+                    new_arxiv_ids=len(new_ids),
+                    hf_from_cache=pf.get("hf_cached", False),
+                    gh_from_cache=pf.get("gh_cached", False),
+                    focus_changed=focus_changed,
+                ))
+                break
 
         metrics.iterations.append(IterationMetric(
             iteration=i, focus=focus[:200],
