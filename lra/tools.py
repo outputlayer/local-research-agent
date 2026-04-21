@@ -296,47 +296,100 @@ class GithubSearch(BaseTool):
         "Поиск по GitHub через официальный `gh` CLI. "
         "Используй для нахождения РЕАЛИЗАЦИЙ и ДАТАСЕТОВ к бумагам из hf_papers: "
         "нашёл метод в абстракте → ищи его репозиторий здесь. "
-        "type='repos' — репозитории (по умолчанию), type='code' — поиск кода."
+        "type='repos' — репозитории (по умолчанию), type='code' — поиск кода.\n"
+        "ВАЖНО: query должен быть КОРОТКИМ — 2-4 ключевых слова. "
+        "НЕ пиши внутрь query 'stars:>=10' или 'language:python' — для этого используй "
+        "отдельные параметры min_stars и language."
     )
     parameters = [
-        {"name": "query", "type": "string", "description": "Поисковый запрос", "required": True},
+        {"name": "query", "type": "string",
+         "description": "2-4 ключевых слова БЕЗ qualifiers", "required": True},
         {"name": "type", "type": "string",
          "description": "'repos' (по умолчанию) или 'code'", "required": False},
         {"name": "limit", "type": "integer",
          "description": "Кол-во результатов 1-10 (по умолчанию 5)", "required": False},
+        {"name": "min_stars", "type": "integer",
+         "description": "минимум звёзд (для type=repos)", "required": False},
+        {"name": "language", "type": "string",
+         "description": "язык программирования (для type=repos)", "required": False},
     ]
 
+    # Паттерн для чистки инлайновых GitHub-qualifiers в query — модель любит их лепить,
+    # хотя gh CLI принимает их отдельными флагами.
+    _QUALIFIER_RE = None  # lazy-инициализация в call()
+
     def call(self, params: str, **kwargs) -> str:
+        import re
+        if GithubSearch._QUALIFIER_RE is None:
+            GithubSearch._QUALIFIER_RE = re.compile(
+                r"\b(stars|language|lang|forks|size|pushed|created|user|org|topic|in|is):[\w:>=<.+/-]+",
+                re.IGNORECASE,
+            )
         p = parse_args(params)
-        query = p.get("query", "")
-        if not query:
+        raw_query = p.get("query", "") or ""
+        if not raw_query:
             return "ошибка: query обязателен"
         search_type = p.get("type", "repos").strip().lower()
         if search_type not in ("repos", "code"):
             search_type = "repos"
         limit = max(1, min(int(p.get("limit", 5)), 10))
 
-        # Dedup через тот же querylog с префиксом gh:
-        gh_key = f"gh-{search_type}: {query}"
-        if normalize_query(gh_key) in seen_queries():
-            return (f"ОТКАЗ: GitHub-запрос '{query}' (type={search_type}) уже делался. "
+        # Вынимаем qualifiers из query → отдельные флаги
+        extracted_min_stars: int | None = None
+        extracted_language: str | None = None
+        for m in GithubSearch._QUALIFIER_RE.finditer(raw_query):
+            tok = m.group(0).lower()
+            if tok.startswith("stars:"):
+                val = tok.split(":", 1)[1].lstrip(">=<")
+                try:
+                    extracted_min_stars = int(val)
+                except ValueError:
+                    pass
+            elif tok.startswith(("language:", "lang:")):
+                extracted_language = tok.split(":", 1)[1]
+        cleaned_query = GithubSearch._QUALIFIER_RE.sub("", raw_query).strip()
+        # схлопываем двойные пробелы
+        cleaned_query = " ".join(cleaned_query.split())
+        if not cleaned_query:
+            return "ошибка: после удаления qualifiers query пустой — пиши 2-4 ключевых слова"
+
+        # Объединяем явные параметры и извлечённые из query (явные приоритетнее)
+        min_stars = p.get("min_stars")
+        if min_stars is None and extracted_min_stars is not None:
+            min_stars = extracted_min_stars
+        language = (p.get("language") or "").strip() or extracted_language or ""
+
+        # Dedup — по ЧИСТОМУ query + type + language (без min_stars, чтобы не плодить лишние записи)
+        dedup_key = f"gh-{search_type}: {cleaned_query}"
+        if language:
+            dedup_key += f" lang={language}"
+        if normalize_query(dedup_key) in seen_queries():
+            return (f"ОТКАЗ: GitHub-запрос '{cleaned_query}' (type={search_type}"
+                    f"{', lang=' + language if language else ''}) уже делался. "
                     "Переформулируй или читай read_notes.")
-        fuzzy = is_similar_to_seen(gh_key)
-        if fuzzy and fuzzy != gh_key:
-            return (f"ОТКАЗ: GitHub-запрос '{query}' слишком похож на '{fuzzy}'. "
+        fuzzy = is_similar_to_seen(dedup_key)
+        if fuzzy and fuzzy != dedup_key:
+            return (f"ОТКАЗ: GitHub-запрос '{cleaned_query}' слишком похож на '{fuzzy}'. "
                     "Смени тему или переходи к следующему [TODO] — ты крутишься по одному и тому же.")
-        log_query(gh_key)
+        log_query(dedup_key)
 
         if search_type == "repos":
             fields = "fullName,url,description,stargazersCount,language,pushedAt"
         else:
             fields = "path,url,repository"
 
-        r = cli_run.run(
-            ["gh", "search", search_type, query,
-             "--limit", str(limit), "--json", fields],
-            timeout=20,
-        )
+        cli_args = ["gh", "search", search_type, cleaned_query,
+                    "--limit", str(limit), "--json", fields]
+        if search_type == "repos":
+            if min_stars is not None:
+                try:
+                    cli_args += ["--stars", f">={int(min_stars)}"]
+                except (TypeError, ValueError):
+                    pass
+            if language:
+                cli_args += ["--language", language]
+
+        r = cli_run.run(cli_args, timeout=20)
         if r.returncode == 127:
             return "ошибка: `gh` CLI не найден в PATH (установи: brew install gh)"
         if r.returncode == 124:
@@ -351,7 +404,14 @@ class GithubSearch(BaseTool):
         except Exception:
             return f"не удалось распарсить JSON: {r.stdout[:300]}"
         if not data:
-            return f"нет результатов на GitHub: {query}"
+            hint = ""
+            if len(cleaned_query.split()) >= 4:
+                hint = " — попробуй СОКРАТИТЬ запрос до 2-3 ключевых слов"
+            elif min_stars and int(min_stars) >= 50:
+                hint = f" — попробуй снизить min_stars (текущий={min_stars})"
+            elif language:
+                hint = f" — попробуй БЕЗ language='{language}'"
+            return f"нет результатов на GitHub: '{cleaned_query}'{hint}"
 
         lines = []
         auto_saved = 0
@@ -371,7 +431,7 @@ class GithubSearch(BaseTool):
                 if name != "?" and stars >= 10:
                     try:
                         kb_mod.add(kb_mod.Atom(
-                            id=name, kind="repo", topic=query,
+                            id=name, kind="repo", topic=cleaned_query,
                             title=name, url=url,
                             stars=int(stars or 0), lang=lang,
                             claim=desc or f"{lang} репозиторий, {stars}★",

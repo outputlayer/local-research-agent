@@ -103,3 +103,72 @@ def test_dedup_via_querylog(gh_tool, monkeypatch):
     out2 = tool.call({"query": "autonomous agents", "type": "repos"})
     assert "ОТКАЗ" in out2
     assert "gh-repos" in (tmp / "querylog.md").read_text(encoding="utf-8")
+
+
+def test_inline_stars_qualifier_is_extracted_to_flag(gh_tool, monkeypatch):
+    """Модель часто лепит 'stars:>=10' в query — должно вырезаться и уходить в --stars."""
+    tool, tools_mod, _ = gh_tool
+    captured = {}
+
+    def _spy(cmd, **kw):
+        captured["cmd"] = cmd
+        return CliResult("[]", "", 0)
+
+    monkeypatch.setattr(tools_mod.cli_run, "run", _spy)
+    tool.call({"query": "multi-agent orchestration stars:>=10", "type": "repos"})
+    cmd = captured["cmd"]
+    # qualifier удалён из позиционного аргумента query
+    assert "stars:>=10" not in cmd[3]
+    assert cmd[3] == "multi-agent orchestration"
+    # и добавлен как флаг
+    assert "--stars" in cmd
+    assert ">=10" in cmd[cmd.index("--stars") + 1]
+
+
+def test_inline_language_qualifier_is_extracted_to_flag(gh_tool, monkeypatch):
+    tool, tools_mod, _ = gh_tool
+    captured = {}
+
+    def _spy(cmd, **kw):
+        captured["cmd"] = cmd
+        return CliResult("[]", "", 0)
+
+    monkeypatch.setattr(tools_mod.cli_run, "run", _spy)
+    tool.call({"query": "RAG pipeline language:python", "type": "repos"})
+    cmd = captured["cmd"]
+    assert "language:python" not in cmd[3]
+    assert cmd[3] == "RAG pipeline"
+    assert "--language" in cmd
+    assert cmd[cmd.index("--language") + 1] == "python"
+
+
+def test_explicit_min_stars_param_takes_precedence(gh_tool, monkeypatch):
+    tool, tools_mod, _ = gh_tool
+    captured = {}
+
+    def _spy(cmd, **kw):
+        captured["cmd"] = cmd
+        return CliResult("[]", "", 0)
+
+    monkeypatch.setattr(tools_mod.cli_run, "run", _spy)
+    tool.call({"query": "x stars:>=5", "type": "repos", "min_stars": 100})
+    cmd = captured["cmd"]
+    # explicit param побеждает inline qualifier
+    assert ">=100" in cmd[cmd.index("--stars") + 1]
+
+
+def test_empty_query_after_stripping_qualifiers_returns_error(gh_tool, monkeypatch):
+    tool, _, _ = gh_tool
+    out = tool.call({"query": "stars:>=10 language:python", "type": "repos"})
+    assert "пустой" in out.lower() or "ошибка" in out.lower()
+
+
+def test_no_results_hint_for_long_query(gh_tool, monkeypatch):
+    tool, tools_mod, _ = gh_tool
+    monkeypatch.setattr(tools_mod.cli_run, "run", _ok("[]"))
+    out = tool.call({
+        "query": "LangGraph multi-agent orchestration state machine workflow",
+        "type": "repos",
+    })
+    assert "нет результатов" in out.lower()
+    assert "сократи" in out.lower()

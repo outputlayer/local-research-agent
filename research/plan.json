@@ -1,0 +1,144 @@
+{
+  "root_goal": "Autonomous Research Agents Architecture (modern approach )",
+  "current_focus_id": "T2",
+  "version": 1,
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Autonomous Research Agents Architecture (modern approach ): обзорные статьи и архитектуры",
+      "status": "in_progress",
+      "parent": null,
+      "origin": "initial",
+      "attempts": 0,
+      "evidence_refs": [],
+      "created_iter": 0,
+      "closed_iter": null,
+      "last_active_iter": 0,
+      "note": ""
+    },
+    {
+      "id": "T2",
+      "title": "Autonomous Research Agents Architecture (modern approach ): ключевые методы и их ограничения",
+      "status": "in_progress",
+      "parent": null,
+      "origin": "initial",
+      "attempts": 0,
+      "evidence_refs": [],
+      "created_iter": 0,
+      "closed_iter": null,
+      "last_active_iter": 0,
+      "note": ""
+    },
+    {
+      "id": "T3",
+      "title": "Autonomous Research Agents Architecture (modern approach ): открытые вопросы и направления",
+      "status": "open",
+      "parent": null,
+      "origin": "initial",
+      "attempts": 0,
+      "evidence_refs": [],
+      "created_iter": 0,
+      "closed_iter": null,
+      "last_active_iter": 0,
+      "note": ""
+    },
+    {
+      "id": "T4",
+      "title": "Ключевые методы и их ограничения: сравнительный анализ подходов (SFT/DPO vs RL)",
+      "status": "in_progress",
+      "parent": null,
+      "origin": "corrective",
+      "attempts": 0,
+      "evidence_refs": [],
+      "created_iter": 1,
+      "closed_iter": null,
+      "last_active_iter": 1,
+      "note": ""
+    },
+    {
+      "id": "T5",
+      "title": "Теоретическая связь и устойчивость методов: анализ зависимости SFT/RL, проблемы забывания и пивиотов (PivotRL, Non-decoupling) — приоритет на глубокую проработку нового направления.",
+      "status": "blocked",
+      "parent": null,
+      "origin": "corrective",
+      "attempts": 0,
+      "evidence_refs": [],
+      "created_iter": 2,
+      "closed_iter": null,
+      "last_active_iter": 2,
+      "note": ""
+    }
+  ],
+  "revisions": [
+    {
+      "iter": 0,
+      "action": "add",
+      "target": "T1",
+      "why": "seed",
+      "ts": "2026-04-21 07:30:46"
+    },
+    {
+      "iter": 0,
+      "action": "add",
+      "target": "T2",
+      "why": "seed",
+      "ts": "2026-04-21 07:30:46"
+    },
+    {
+      "iter": 0,
+      "action": "add",
+      "target": "T3",
+      "why": "seed",
+      "ts": "2026-04-21 07:30:46"
+    },
+    {
+      "iter": 0,
+      "action": "rotate_focus",
+      "target": "T1",
+      "why": "начальный фокус",
+      "ts": "2026-04-21 07:30:46"
+    },
+    {
+      "iter": 1,
+      "action": "add",
+      "target": "T4",
+      "why": "replanner выставил новый FOCUS через write_plan",
+      "ts": "2026-04-21 07:43:40"
+    },
+    {
+      "iter": 1,
+      "action": "rotate_focus",
+      "target": "T4",
+      "why": "новый corrective фокус",
+      "ts": "2026-04-21 07:43:40"
+    },
+    {
+      "iter": 2,
+      "action": "add",
+      "target": "T5",
+      "why": "replanner выставил новый FOCUS через write_plan",
+      "ts": "2026-04-21 08:00:58"
+    },
+    {
+      "iter": 2,
+      "action": "rotate_focus",
+      "target": "T5",
+      "why": "новый corrective фокус",
+      "ts": "2026-04-21 08:00:58"
+    },
+    {
+      "iter": 0,
+      "action": "block",
+      "target": "T5",
+      "why": "replanner провалился дважды, ротируем",
+      "ts": "2026-04-21 08:20:56"
+    },
+    {
+      "iter": 0,
+      "action": "rotate_focus",
+      "target": "T2",
+      "why": "fallback ротация после провала replanner'а",
+      "ts": "2026-04-21 08:20:56"
+    }
+  ]
+}
