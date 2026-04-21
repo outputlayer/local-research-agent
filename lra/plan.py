@@ -350,6 +350,86 @@ def reset(query: str, path: Path | None = None) -> Plan:
     return plan
 
 
+def bootstrap_from_seeds(query: str, seeds: list[dict], topic_type: str = "mixed",
+                         path: Path | None = None) -> Plan | None:
+    """Инициализирует plan.json из LLM-сгенерированных seed-задач.
+
+    `seeds` — список dict c ключами `title` и `why` (опц). Должно быть 3-6 валидных
+    элементов, иначе возвращаем None (caller упадёт на статический reset()).
+    `topic_type` пишется в root_goal для трассируемости.
+
+    Поведенческая гарантия: если функция возвращает Plan, файл plan.json уже записан
+    и имеет ≥1 open-задачу + установленный focus. Если возвращает None — ни один файл
+    не тронут (caller должен вызвать reset()).
+    """
+    # Валидация входа — строгая, поскольку это граница "LLM → наш код"
+    if not isinstance(seeds, list) or not (3 <= len(seeds) <= 8):
+        return None
+    cleaned: list[tuple[str, str]] = []
+    for s in seeds:
+        if not isinstance(s, dict):
+            continue
+        title = str(s.get("title", "")).strip()
+        why = str(s.get("why", "")).strip() or "bootstrap"
+        # Минимальная длина заголовка — чтобы отсечь «test», «a», etc.
+        if 10 <= len(title) <= 200:
+            cleaned.append((title, why))
+    if len(cleaned) < 3:
+        return None
+
+    tt = topic_type if topic_type in ("engineering", "theoretical", "mixed") else "mixed"
+    plan = Plan(root_goal=f"[{tt}] {query}")
+    first = None
+    for title, why in cleaned:
+        t = plan.add_task(title, origin="bootstrap", iter_=0, why=why)
+        if first is None:
+            first = t
+    plan.set_focus(first.id, iter_=0, why=f"bootstrap focus (topic_type={tt})")
+    save(plan, path=path)
+    return plan
+
+
+def parse_bootstrap_json(text: str) -> tuple[str, list[dict]] | None:
+    """Парсит вывод INITIAL_PLANNER_PROMPT. Толерантен к ```json-ограде и префиксам.
+
+    Возвращает (topic_type, seeds) или None если JSON невалиден/пуст.
+    """
+    if not text:
+        return None
+    # Убираем распространённые обёртки: ```json ... ``` или ``` ... ```
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        # режем первую и последнюю fenced-строку
+        lines = stripped.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    # Находим первую `{` и последнюю `}` — даже если LLM наговорил вокруг
+    lb = stripped.find("{")
+    rb = stripped.rfind("}")
+    if lb < 0 or rb <= lb:
+        return None
+    candidate = stripped[lb:rb + 1]
+    try:
+        import json5
+        data = json5.loads(candidate)
+    except Exception:
+        try:
+            data = json.loads(candidate)
+        except Exception:
+            return None
+    if not isinstance(data, dict):
+        return None
+    tt = str(data.get("topic_type", "mixed")).strip().lower()
+    tasks = data.get("tasks", [])
+    if not isinstance(tasks, list):
+        return None
+    return tt, tasks
+
+
+
 # ── Guard ─────────────────────────────────────────────────────────────────
 @dataclass
 class GuardReport:

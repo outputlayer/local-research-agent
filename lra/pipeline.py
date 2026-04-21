@@ -26,6 +26,7 @@ from .prompts import (
     CRITIC_PROMPT,
     EXPLORER_PROMPT,
     FACT_CRITIC_PROMPT,
+    INITIAL_PLANNER_PROMPT,
     REPLANNER_PROMPT,
     STRUCTURE_CRITIC_PROMPT,
     SYNTHESIZER_PROMPT,
@@ -126,12 +127,56 @@ def _rotate_focus_fallback(query: str) -> bool:
     return True
 
 
+def _bootstrap_initial_plan(query: str) -> bool:
+    """Один LLM-вызов BOOTSTRAP-планера → переписываем plan.json специфичными задачами.
+
+    Тихо degrade'ится в статический план (уже записанный reset_research) при:
+    - ошибке LLM / таймауте,
+    - невалидном JSON,
+    - недостаточном количестве задач (<3).
+
+    Возвращает True если bootstrap успешно применён, False если оставлен статический план.
+    """
+    try:
+        planner = build_bot(INITIAL_PLANNER_PROMPT, [], max_tokens=1024)
+        msgs = [{"role": "user", "content": f"Тема: {query}"}]
+        resp = _run_agent(planner, msgs, "🧭")
+        raw = ""
+        if resp and isinstance(resp, list):
+            for m in reversed(resp):
+                c = m.get("content", "") if isinstance(m, dict) else ""
+                if c:
+                    raw = c
+                    break
+        parsed = plan_mod.parse_bootstrap_json(raw)
+        if not parsed:
+            log.info("bootstrap planner: невалидный JSON, остаёмся на статическом плане")
+            return False
+        topic_type, seeds = parsed
+        plan = plan_mod.bootstrap_from_seeds(query, seeds, topic_type=topic_type)
+        if plan is None:
+            log.info("bootstrap planner: seeds не прошли валидацию (n=%d)", len(seeds))
+            return False
+        print(f"   🧭 bootstrap plan: topic_type={topic_type}, задач={len(seeds)}")
+        return True
+    except Exception as exc:
+        log.warning("bootstrap planner упал (%s), остаёмся на статическом плане", exc)
+        return False
+
+
 def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     """Полный пайплайн: explorer/replanner (×depth) → compressor → synthesizer →
     writer/critic (×critic_rounds) → validator цитат."""
     reset_research(query)
     metrics = RunMetrics(query=query)
     print(f"📁 Рабочая папка: {RESEARCH_DIR}\n")
+
+    # Bootstrap-планер (опционально): один LLM-вызов до фазы 1 генерирует 4-6
+    # тематически-специфичных seed-задач и классифицирует тему (engineering / theoretical
+    # / mixed). При ошибке/невалидном JSON тихо остаёмся на статическом плане,
+    # который уже создал reset_research → plan_mod.reset().
+    if CFG.get("dynamic_initial_plan", True):
+        _bootstrap_initial_plan(query)
 
     explorer = build_bot(EXPLORER_PROMPT,
                          ["hf_papers", "github_search",

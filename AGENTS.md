@@ -27,7 +27,7 @@
 | # | Требование | Команда верификации |
 |---|---|---|
 | A | Перед коммитом: `ruff check lra tests agent.py` → `All checks passed!` | `ruff check lra tests agent.py` |
-| B | Перед коммитом: `pytest -q` → `139 passed` (или выше) | `source .venv/bin/activate && python -m pytest -q` |
+| B | Перед коммитом: `pytest -q` → `154 passed` (или выше) | `source .venv/bin/activate && python -m pytest -q` |
 | C | Новый @register_tool → добавить тест в `tests/` | `ls tests/test_*.py` |
 | D | Рефактор поведенчески-нейтральный → 4-check по refactor-verify SKILL | см. `.skills/vibesubin/plugins/vibesubin/skills/refactor-verify/SKILL.md` |
 | E | Новый CFG-флаг → добавить в `lra/config.py` и документировать в этом файле ниже | `grep CFG.get lra/*.py` |
@@ -47,7 +47,7 @@
 source .venv/bin/activate
 python -m pytest -q
 ```
-Все 139 тестов — без MLX, ~1 секунда.
+Все 154 теста — без MLX, ~1 секунда.
 
 ### Запуск агента
 ```bash
@@ -69,6 +69,7 @@ python -c "from lra.pipeline import resume_research; resume_research()"
 |---|---|---|
 | `notes_strict` | `True` | Pre-append verifier блокирует AppendNotes на неизвестных arxiv-id |
 | `specialized_critics` | `True` | Fact-critic + structure-critic вместо combined `CRITIC_PROMPT` |
+| `dynamic_initial_plan` | `True` | LLM-bootstrap topic-aware seeds перед Phase 1; fallback на статический 5-seed plan при любой ошибке парсинга/LLM |
 | `hitl` | `False` | Human-in-the-loop пауза после validator'а (REPL: `/hitl on`) |
 
 ## При любом изменении — прогон
