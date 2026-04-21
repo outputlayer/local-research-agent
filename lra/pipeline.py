@@ -55,7 +55,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     print(f"📁 Рабочая папка: {RESEARCH_DIR}\n")
 
     explorer = build_bot(EXPLORER_PROMPT,
-                         ["hf_papers", "read_plan", "read_notes", "append_notes",
+                         ["hf_papers", "github_search",
+                          "read_plan", "read_notes", "append_notes",
                           "read_lessons", "append_lessons", "read_querylog"],
                          max_tokens=3072)
     replanner = build_bot(REPLANNER_PROMPT,

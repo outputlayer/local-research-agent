@@ -211,7 +211,7 @@ class WriteSynthesis(BaseTool):
         ensure_dir()
         content = parse_args(params)["content"]
         SYNTHESIS_PATH.write_text(content)
-        tags = sum(content.count(t) for t in ("[BRIDGE]", "[CONTRADICTION]", "[GAP]", "[EXTRAPOLATION]", "[TESTABLE]"))
+        tags = sum(content.count(t) for t in ("[BRIDGE]", "[CONTRADICTION]", "[GAP]", "[EXTRAPOLATION]", "[REUSE]", "[TESTABLE]"))
         return f"synthesis.md ({len(content)} симв, {tags} инсайтов)"
 
 
@@ -264,3 +264,87 @@ class ReadQueryLog(BaseTool):
             if len(lines) >= 30:
                 break
         return "\n".join(reversed(lines))
+
+
+@register_tool("github_search")
+class GithubSearch(BaseTool):
+    description = (
+        "Поиск по GitHub через официальный `gh` CLI. "
+        "Используй для нахождения РЕАЛИЗАЦИЙ и ДАТАСЕТОВ к бумагам из hf_papers: "
+        "нашёл метод в абстракте → ищи его репозиторий здесь. "
+        "type='repos' — репозитории (по умолчанию), type='code' — поиск кода."
+    )
+    parameters = [
+        {"name": "query", "type": "string", "description": "Поисковый запрос", "required": True},
+        {"name": "type", "type": "string",
+         "description": "'repos' (по умолчанию) или 'code'", "required": False},
+        {"name": "limit", "type": "integer",
+         "description": "Кол-во результатов 1-10 (по умолчанию 5)", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        query = p.get("query", "")
+        if not query:
+            return "ошибка: query обязателен"
+        search_type = p.get("type", "repos").strip().lower()
+        if search_type not in ("repos", "code"):
+            search_type = "repos"
+        limit = max(1, min(int(p.get("limit", 5)), 10))
+
+        # Dedup через тот же querylog с префиксом gh:
+        gh_key = f"gh-{search_type}: {query}"
+        if normalize_query(gh_key) in seen_queries():
+            return (f"ОТКАЗ: GitHub-запрос '{query}' (type={search_type}) уже делался. "
+                    "Переформулируй или читай read_notes.")
+        log_query(gh_key)
+
+        if search_type == "repos":
+            fields = "fullName,url,description,stargazersCount,language,pushedAt"
+        else:
+            fields = "path,url,repository"
+
+        try:
+            r = subprocess.run(
+                ["gh", "search", search_type, query,
+                 "--limit", str(limit), "--json", fields],
+                capture_output=True, text=True, timeout=20,
+            )
+        except FileNotFoundError:
+            return "ошибка: `gh` CLI не найден в PATH (установи: brew install gh)"
+        except subprocess.TimeoutExpired:
+            return "таймаут поиска GitHub"
+        if r.returncode != 0:
+            err = r.stderr.strip()[:400]
+            if "authentication" in err.lower() or "auth" in err.lower() or "login" in err.lower():
+                return "ошибка gh: нужна авторизация. Выполни в терминале: `gh auth login`"
+            return f"ошибка gh: {err}"
+        try:
+            data = json.loads(r.stdout)
+        except Exception:
+            return f"не удалось распарсить JSON: {r.stdout[:300]}"
+        if not data:
+            return f"нет результатов на GitHub: {query}"
+
+        lines = []
+        if search_type == "repos":
+            for item in data:
+                name = item.get("fullName", "?")
+                url = item.get("url", "")
+                desc = (item.get("description") or "").strip()[:120]
+                stars = item.get("stargazersCount", 0)
+                lang = item.get("language") or ""
+                pushed = (item.get("pushedAt") or "")[:10]
+                lines.append(
+                    f"★{stars:>6}  [{name}]({url})  {lang}  updated:{pushed}\n"
+                    f"         {desc}"
+                )
+        else:  # code
+            for item in data:
+                path = item.get("path", "")
+                url = item.get("url", "")
+                repo = (item.get("repository") or {}).get("fullName", "?")
+                lines.append(f"[{repo}] {path}\n  {url}")
+
+        return "\n\n".join(lines)
+
