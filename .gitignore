@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+workspace/
+research/archive/
+research/draft.md
+research/notes.md
+research/plan.md
+research/synthesis.md
