@@ -137,6 +137,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                 "и СРАЗУ после этого append_notes с минимум 3 фактами и [arxiv-id]. "
                 "Затем append_lessons одной строкой.")}]
             _run_agent(explorer, retry, "🔁")
+            after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
+            grew = after - before
             ids_after = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
             new_ids = ids_after - ids_before
 
@@ -235,7 +237,9 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         c_seconds = time.time() - t_cr
         critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
         issues = count_critic_issues(critique)
-        approved = "APPROVED" in critique.upper() and len(critique) < 60
+        # APPROVED считается валидным только если критик не перечислил правки
+        # (issues == 0 отсекает длинные ответы вроде "APPROVED, но добавь X, Y").
+        approved = "APPROVED" in critique.upper() and issues == 0
         converged = False
         print(f"   📋 правок у критика: {issues}")
         if approved:
