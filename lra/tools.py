@@ -11,7 +11,7 @@ from . import cli as cli_run
 from . import kb as kb_mod
 from .config import DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
 from .logger import get_logger
-from .memory import ensure_dir, log_query, seen_queries
+from .memory import ensure_dir, is_similar_to_seen, log_query, seen_queries
 from .utils import normalize_query, parse_args
 
 log = get_logger("tools")
@@ -57,6 +57,11 @@ class HfPapers(BaseTool):
         if normalize_query(query) in seen_queries():
             return (f"ОТКАЗ: запрос '{query}' уже выполнялся в этой сессии. "
                     "Переформулируй (другие ключевые слова, автор, год, техника) или читай read_notes.")
+        # Fuzzy-блок: ловим семантические дубликаты через jaccard >= 0.75
+        fuzzy = is_similar_to_seen(query)
+        if fuzzy and fuzzy != query:
+            return (f"ОТКАЗ: запрос '{query}' слишком похож на уже выполненный '{fuzzy}'. "
+                    "Смени тему (другие термины, автор, год) или перейди к другому [TODO].")
         log_query(query)
         r = cli_run.run(
             ["hf", "papers", "search", query, "--limit", str(limit * 2), "--format", "json"],
@@ -301,6 +306,10 @@ class GithubSearch(BaseTool):
         if normalize_query(gh_key) in seen_queries():
             return (f"ОТКАЗ: GitHub-запрос '{query}' (type={search_type}) уже делался. "
                     "Переформулируй или читай read_notes.")
+        fuzzy = is_similar_to_seen(gh_key)
+        if fuzzy and fuzzy != gh_key:
+            return (f"ОТКАЗ: GitHub-запрос '{query}' слишком похож на '{fuzzy}'. "
+                    "Смени тему или переходи к следующему [TODO] — ты крутишься по одному и тому же.")
         log_query(gh_key)
 
         if search_type == "repos":

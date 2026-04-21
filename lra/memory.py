@@ -15,7 +15,7 @@ from .config import (
     SYNTHESIS_PATH,
 )
 from .kb import KB_PATH
-from .utils import normalize_query
+from .utils import jaccard, keyword_set, normalize_query
 
 
 def ensure_dir():
@@ -29,6 +29,36 @@ def seen_queries() -> set[str]:
     return {normalize_query(ln.lstrip("- ").strip())
             for ln in QUERYLOG_PATH.read_text(encoding="utf-8").splitlines()
             if ln.strip() and not ln.lstrip().startswith("#")}
+
+
+# Порог, выше которого два запроса считаются семантически эквивалентными.
+# Эмпирически: 0.75 ловит перестановки слов типа "X Y Z" vs "X Y Z python stars pushedAt"
+# не трогая разные темы. См. research/querylog.md от 2026-04-21 — массовое дублирование
+# запросов-перефразировок к WebWeaver/AgentCPM обходило точный dedup.
+FUZZY_DUP_THRESHOLD = 0.75
+
+
+def is_similar_to_seen(query: str) -> str | None:
+    """Fuzzy-поиск ближайшего уже виденного запроса по jaccard на keyword-set.
+
+    Возвращает найденный дубликат (исходный текст) если похожесть ≥ FUZZY_DUP_THRESHOLD,
+    иначе None. Учитывает последние 30 запросов — ограничение для скорости O(30·log).
+    """
+    if not QUERYLOG_PATH.exists():
+        return None
+    q_kw = keyword_set(query)
+    if len(q_kw) < 3:  # слишком короткие запросы не фильтруем — могут быть разными
+        return None
+    recent: list[str] = []
+    for ln in QUERYLOG_PATH.read_text(encoding="utf-8").splitlines():
+        s = ln.strip()
+        if not s or s.startswith("#") or s.startswith("##"):
+            continue
+        recent.append(s.lstrip("- ").strip())
+    for past in reversed(recent[-30:]):
+        if jaccard(q_kw, keyword_set(past)) >= FUZZY_DUP_THRESHOLD:
+            return past
+    return None
 
 
 def log_query(query: str):
