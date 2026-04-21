@@ -369,8 +369,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     # Фаза 2.0 — синтез
     print("\n💡 Фаза 2.0: синтезатор (мосты/противоречия/пробелы/экстраполяция/testable)")
     synthesizer = build_bot(SYNTHESIZER_PROMPT,
-                            ["read_plan", "read_notes", "write_synthesis", "run_python",
-                             "kb_search"],
+                            ["read_plan", "read_notes", "write_synthesis", "kb_search"],
                             max_tokens=4096)
     t_syn = time.time()
     _run_agent(synthesizer,
@@ -782,8 +781,7 @@ def resume_research(query: str | None = None, critic_rounds: int = 2):
     if not have["synthesis.md"]:
         print("\n💡 synthesis.md отсутствует — запускаем фазу синтеза")
         synthesizer = build_bot(SYNTHESIZER_PROMPT,
-                                ["read_plan", "read_notes", "write_synthesis", "run_python",
-                                 "kb_search"],
+                                ["read_plan", "read_notes", "write_synthesis", "kb_search"],
                                 max_tokens=4096)
         t_syn = time.time()
         _run_agent(synthesizer,

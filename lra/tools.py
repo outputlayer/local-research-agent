@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
-import sys
 from datetime import UTC
 
 from qwen_agent.tools.base import BaseTool, register_tool
@@ -42,30 +40,6 @@ def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
         return set(), set()
     known_in_kb = {a.get("id", "") for a in kb_mod.load() if a.get("kind") == "paper"}
     return ids & known_in_kb, ids - known_in_kb
-
-_SANDBOX_PRELUDE = r"""
-import resource, sys, builtins
-# CPU 5s, address space 512MB, no fork
-resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-try: resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))
-except Exception: pass
-try: resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))
-except Exception: pass
-# блок сети через monkey-patch socket
-import socket
-def _blocked(*a, **k): raise OSError('сеть запрещена в песочнице')
-socket.socket = _blocked  # type: ignore
-socket.create_connection = _blocked  # type: ignore
-# запись только в /tmp
-_orig_open = builtins.open
-def _safe_open(f, mode='r', *a, **k):
-    if any(m in mode for m in ('w','a','x','+')) and not str(f).startswith('/tmp/'):
-        raise PermissionError('запись разрешена только в /tmp/')
-    return _orig_open(f, mode, *a, **k)
-builtins.open = _safe_open
-CODE = sys.stdin.read()
-exec(compile(CODE, '<tool>', 'exec'), {'__name__':'__main__'})
-"""
 
 
 @register_tool("hf_papers")
@@ -146,32 +120,6 @@ class HfPapers(BaseTool):
                     log.debug("kb auto-save paper failed %s: %s", pid, e)
         footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
         return "\n\n".join(lines) + footer + stale_note
-
-
-@register_tool("run_python")
-class RunPython(BaseTool):
-    description = ("Выполняет Python-код в изолированной подпроцессной песочнице "
-                   "(без сети, 5с CPU, 512MB RAM). Возвращает stdout+stderr.")
-    parameters = [{"name": "code", "type": "string", "description": "Код", "required": True}]
-
-    # SECURITY CAVEAT: песочница — best-effort для кода, который генерирует НАША локальная LLM.
-    # RLIMIT_AS/CPU + monkey-patch на socket и builtins.open блокируют обычные побеги,
-    # но НЕ защищают от ctypes, низкоуровневого syscall, socket.socketpair, mach-api на
-    # macOS, и bug'ов в самом CPython. Это НЕ sandbox для untrusted-input из сети.
-    # Никогда не подавать сюда код, пришедший от внешнего пользователя / веб-формы / API.
-    # Для этого нужен nsjail / bubblewrap / Docker — тяжёлая артиллерия, у нас не окупается.
-
-    def call(self, params: str, **kwargs) -> str:
-        code = parse_args(params)["code"]
-        try:
-            r = subprocess.run(
-                [sys.executable, "-I", "-c", _SANDBOX_PRELUDE],
-                input=code, capture_output=True, text=True, timeout=10,
-            )
-        except subprocess.TimeoutExpired:
-            return "таймаут (>10с)"
-        out = (r.stdout + (r.stderr and f"\n[stderr]\n{r.stderr}" or "")).strip()
-        return (out or "(вывода нет)")[:5000]
 
 
 @register_tool("compact_notes")

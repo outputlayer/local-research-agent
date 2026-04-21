@@ -17,10 +17,9 @@
 | 1 | Не удалять `research/lessons.md` и `research/querylog.md` при `/clean` | Reflexion-память кросс-сессионная — её стирает только `/forget` |
 | 2 | Не писать в `AppendNotes` arxiv-id, которого НЕТ в `kb.jsonl` (pre-append verifier)| Explorer иначе галлюцинирует ссылки |
 | 3 | Не добавлять `shell=True` в `subprocess.run` | Все внешние CLI (`hf`, `gh`) запускаются через argv-list в `lra/cli.py` |
-| 4 | Не подавать в `RunPython` код из внешнего источника (сеть/веб-форма/API) | Sandbox — best-effort для локальной LLM, не для untrusted input |
-| 5 | Не менять `CRITIC_PROMPT` / `FACT_CRITIC_PROMPT` / `STRUCTURE_CRITIC_PROMPT` текст без одобрения | Пороги качества откалиброваны на текущие версии |
-| 6 | Не коммитить файлы в `.skills/`, `.cache/`, `research/archive/` | Всё в `.gitignore`; сторонние скиллы и кэши |
-| 7 | Не вызывать `print(...)` в библиотечном коде `lra/*.py` (кроме явных фаз пайплайна) | Логирование через `lra/logger.py`, чтобы не мешало pytest capture |
+| 4 | Не менять `CRITIC_PROMPT` / `FACT_CRITIC_PROMPT` / `STRUCTURE_CRITIC_PROMPT` текст без одобрения | Пороги качества откалиброваны на текущие версии |
+| 5 | Не коммитить файлы в `.skills/`, `.cache/`, `research/archive/` | Всё в `.gitignore`; сторонние скиллы и кэши |
+| 6 | Не вызывать `print(...)` в библиотечном коде `lra/*.py` (кроме явных фаз пайплайна) | Логирование через `lra/logger.py`, чтобы не мешало pytest capture |
 
 ## Инварианты — ВСЕГДА делай
 
@@ -37,7 +36,6 @@
 - **`tools.py` = один файл 689 LOC**: split в `tools/` package отложен — 14 monkeypatch в тестах прицеплены к `lra.tools.*` атрибутам, ROI низкий.
 - **`research_loop` = 171 NLOC, CCN=42**: уже разбит на `_run_iteration` / `_finalize_draft` / `_hitl_review`. Дальнейший split — линейная композиция фаз, увеличит прыжки по коду.
 - **Pinned deps через `==` exact, без lockfile**: простой CLI без автообновлений. Lockfile = over-engineering для 4 зависимостей.
-- **Sandbox RunPython — best-effort**: nsjail / bubblewrap / Docker для локального CLI не окупаются (см. docstring `RunPython` class).
 - **CRITIC_PROMPT сохранён рядом с FACT/STRUCTURE_CRITIC_PROMPT**: legacy-режим `specialized_critics=False`, нужен для совместимости с resume.
 
 ## Как работать с этим кодом

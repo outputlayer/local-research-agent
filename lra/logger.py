@@ -39,5 +39,13 @@ def get_logger(name: str = "lra") -> logging.Logger:
     sh.setFormatter(fmt)
     root.addHandler(sh)
 
+    # Шумный warning qwen-agent'а — 'Invalid json tool-calling arguments' —
+    # спамит когда модель кладёт дубликат ключа или префикс вокруг JSON. Наш
+    # `parse_args` толерантен ко всем этим случаям (json5 + regex-fallback), так что
+    # warning бесполезен пользователю и мешает читать вывод пайплайна. Поднимаем
+    # уровень этого конкретного логгера до ERROR — сами ошибки парсинга (которые
+    # действительно ломают вызов) продолжат приходить.
+    logging.getLogger("nous_fncall_prompt").setLevel(logging.ERROR)
+
     _CONFIGURED = True
     return logger

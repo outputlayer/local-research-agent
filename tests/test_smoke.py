@@ -20,7 +20,7 @@ def test_tools_registered():
     from qwen_agent.tools.base import TOOL_REGISTRY
 
     from lra import tools  # noqa: F401
-    for t in ("hf_papers", "run_python", "write_draft", "append_draft",
+    for t in ("hf_papers", "write_draft", "append_draft",
               "read_notes", "write_plan", "read_querylog", "append_lessons",
               "github_search"):
         assert t in TOOL_REGISTRY, f"tool {t} не зарегистрирован"

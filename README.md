@@ -31,11 +31,10 @@ explorer ↔ replanner  (×depth, адаптивный план)
 - **Адаптивный replanner**: после каждой итерации explorer'а переписывает `plan.md` со структурой `[FOCUS] / Digest / Direction check / [TODO] / [DONE]`
 - **Critic convergence**: цикл writer↔critic выходит если жаккард-сходство соседних критик >70%
 - **Валидатор цитат**: проверяет существование arXiv-id и семантическую связь текста вокруг id в draft'е с фактами в notes
-- **Sandbox для `run_python`**: подпроцесс без сети, RLIMIT_CPU=5s, AS=512MB, запись только в `/tmp/`
 
-## Tools (15)
+## Tools (14)
 
-`hf_papers`, `run_python`, `read/write/append_draft`, `read/append_notes`, `compact_notes`, `read/write_plan`, `read/write_synthesis`, `read/append_lessons`, `read_querylog`.
+`hf_papers`, `read/write/append_draft`, `read/append_notes`, `compact_notes`, `read/write_plan`, `read/write_synthesis`, `read/append_lessons`, `read_querylog`.
 
 ## Установка
 

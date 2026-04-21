@@ -23,13 +23,11 @@
 | `lra/pipeline.py` | 736 | оркестратор. Phase 1 (explorer↔replanner) → compressor? → Phase 2 (synthesizer) → Phase 3 (writer ↔ critics) → Phase 4 (validator) → HITL? | `research_loop(query, depth, critic_rounds)`, `resume_research()` |
 | `lra/__init__.py` | ~10 | `__all__` re-exports | — |
 
-## `lra/tools.py` — 23 @register_tool классов
+## `lra/tools.py` — 22 @register_tool классов
 
 Группы (порядок как в файле):
 
 **Поиск:** `HfPapers` (hf papers search), `GithubSearch` (gh search repos/code) — оба с dedup через `querylog`, autosave в `kb.jsonl`.
-
-**Sandbox:** `RunPython` — `subprocess` с RLIMIT_CPU=5s, AS=512MB, socket monkey-patch, write только в `/tmp`. **Best-effort** (см. docstring).
 
 **Notes:** `ReadNotes`, `ReadNotesFocused` (anti-drift: jaccard-фильтр блоков по focus-запросу), `AppendNotes` (с pre-append verifier если `notes_strict=True`), `CompactNotes`.
 
