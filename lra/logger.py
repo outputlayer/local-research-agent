@@ -45,7 +45,9 @@ def get_logger(name: str = "lra") -> logging.Logger:
     # warning бесполезен пользователю и мешает читать вывод пайплайна. Поднимаем
     # уровень этого конкретного логгера до ERROR — сами ошибки парсинга (которые
     # действительно ломают вызов) продолжат приходить.
-    logging.getLogger("nous_fncall_prompt").setLevel(logging.ERROR)
+    # NOTE: qwen_agent использует logger name 'qwen_agent_logger' (см. qwen_agent/log.py);
+    # filename 'nous_fncall_prompt.py' в логах — это %(filename)s в formatter'е, не имя логгера.
+    logging.getLogger("qwen_agent_logger").setLevel(logging.ERROR)
 
     _CONFIGURED = True
     return logger
