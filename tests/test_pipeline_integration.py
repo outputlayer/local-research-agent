@@ -62,6 +62,11 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
     def fake_run_agent(bot, messages, icon):
         role = bot.role
         if role == "explorer":
+            # Предварительно зарегистрируем id в kb — иначе pre-append verifier
+            # (notes_strict) заблокирует запись с неизвестным arxiv-id.
+            from lra import kb as _kb
+            for _pid in ("2401.00001", "2401.00002"):
+                _kb.add(_kb.Atom(id=_pid, kind="paper", topic="test", claim="seed"))
             tools.AppendNotes().call(
                 {"content": "## test\n[2401.00001] fact A about transformers\n"
                             "[2401.00002] fact B about attention\n"
@@ -157,6 +162,8 @@ def test_research_loop_early_stop_on_plan_complete(tmp_path, monkeypatch):
     def fake_run_agent(bot, messages, icon):
         if bot.role == "explorer":
             iters_called.append("explorer")
+            from lra import kb as _kb
+            _kb.add(_kb.Atom(id="2401.00001", kind="paper", topic="test", claim="seed"))
             tools.AppendNotes().call({"content": "[2401.00001] fact"})
             tools.AppendLessons().call({"content": "[iter] test"})
         elif bot.role == "replanner":

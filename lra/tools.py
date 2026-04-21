@@ -9,12 +9,26 @@ from qwen_agent.tools.base import BaseTool, register_tool
 
 from . import cli as cli_run
 from . import kb as kb_mod
-from .config import DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
+from .config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
 from .logger import get_logger
 from .memory import ensure_dir, is_similar_to_seen, log_query, seen_queries
-from .utils import normalize_query, parse_args
+from .utils import extract_ids, normalize_query, parse_args
 
 log = get_logger("tools")
+
+
+def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
+    """Возвращает (known_ids, unknown_ids) — какие arxiv-id из content есть в kb.jsonl.
+
+    Используется pre-append verifier'ом в AppendNotes: explorer не должен добавлять в notes
+    факты с id, которых ни hf_papers, ни kb_search ни разу не возвращали в этой сессии.
+    Это отсекает галлюцинации на этапе записи, а не на финальной валидации draft.md.
+    """
+    ids = extract_ids(content)
+    if not ids:
+        return set(), set()
+    known_in_kb = {a.get("id", "") for a in kb_mod.load() if a.get("kind") == "paper"}
+    return ids & known_in_kb, ids - known_in_kb
 
 _SANDBOX_PRELUDE = r"""
 import resource, sys, builtins
@@ -185,6 +199,18 @@ class AppendNotes(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = parse_args(params)["content"]
+        # Pre-append verifier: блокируем запись, если в content есть arxiv-id,
+        # которых нет в kb.jsonl (т.е. explorer их не находил через hf_papers/kb_search).
+        # Это отсекает галлюцинации id на этапе записи.
+        if CFG.get("notes_strict", True):
+            known, unknown = verify_ids_against_kb(content)
+            if unknown:
+                return (f"ОТКАЗ: в заметке упомянуты arxiv-id, которых НЕТ в kb.jsonl: "
+                        f"{sorted(unknown)}. Это признак галлюцинации. "
+                        "Сначала вызови hf_papers или kb_search по нужной теме, чтобы получить "
+                        "ВЕРИФИЦИРОВАННЫЙ [arxiv-id], затем повторно append_notes. "
+                        "Либо перепиши без этих id, цитируя только известные: "
+                        f"{sorted(known) or '(пока нет)'}.")
         with NOTES_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
         return f"notes.md +{len(content)} симв (всего {NOTES_PATH.stat().st_size} симв)"
