@@ -24,3 +24,6 @@ research/metrics.json
 *.safetensors
 *.gguf
 *.bin
+
+# Внешние скиллы для разработки (vibesubin) — клонируются локально, не коммитим
+.skills/
