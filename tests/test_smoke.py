@@ -3,7 +3,8 @@
 
 def test_config_loads():
     from lra.config import CFG, RESEARCH_DIR
-    assert "model" in CFG
+    assert CFG["model"]  # dict-style доступ
+    assert CFG.model  # dataclass-style
     assert RESEARCH_DIR.name == "research"
 
 

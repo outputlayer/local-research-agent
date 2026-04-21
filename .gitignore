@@ -13,9 +13,10 @@ research/plan.md
 research/synthesis.md
 research/lessons.md
 research/querylog.md
+research/run.log
 research/archive/
 
-# HF/MLX кэш, если вдруг попадёт в репо
+# HF/MLX кэш + наш disk-cache для hf/gh CLI
 .cache/
 *.safetensors
 *.gguf

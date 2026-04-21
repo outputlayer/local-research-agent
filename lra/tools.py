@@ -6,10 +6,14 @@ import sys
 
 from qwen_agent.tools.base import BaseTool, register_tool
 
+from . import cli as cli_run
 from .config import (DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH,
                      QUERYLOG_PATH, SYNTHESIS_PATH)
+from .logger import get_logger
 from .memory import ensure_dir, log_query, seen_queries
 from .utils import normalize_query, parse_args
+
+log = get_logger("tools")
 
 _SANDBOX_PRELUDE = r"""
 import resource, sys, builtins
@@ -53,16 +57,15 @@ class HfPapers(BaseTool):
             return (f"ОТКАЗ: запрос '{query}' уже выполнялся в этой сессии. "
                     "Переформулируй (другие ключевые слова, автор, год, техника) или читай read_notes.")
         log_query(query)
-        try:
-            r = subprocess.run(
-                ["hf", "papers", "search", query, "--limit", str(limit * 2), "--format", "json"],
-                capture_output=True, text=True, timeout=30,
-            )
-        except FileNotFoundError:
-            return "ошибка: `hf` CLI не найден в PATH"
-        except subprocess.TimeoutExpired:
-            return "таймаут поиска"
-        if r.returncode != 0:
+        r = cli_run.run(
+            ["hf", "papers", "search", query, "--limit", str(limit * 2), "--format", "json"],
+            timeout=30,
+        )
+        if r.returncode == 127:
+            return "ошибка: `hf` CLI не найден в PATH (pip install huggingface_hub[cli])"
+        if r.returncode == 124:
+            return "таймаут поиска hf_papers"
+        if not r.ok:
             return f"ошибка: {r.stderr.strip()[:500]}"
         try:
             data = json.loads(r.stdout)
@@ -113,7 +116,7 @@ class CompactNotes(BaseTool):
         ensure_dir()
         content = parse_args(params)["content"]
         old = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
-        NOTES_PATH.write_text(content)
+        NOTES_PATH.write_text(content, encoding='utf-8')
         return f"notes.md: {old} → {len(content)} симв (сжато в {max(1, old // max(1, len(content)))}x)"
 
 
@@ -125,7 +128,7 @@ class WriteDraft(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = parse_args(params)["content"]
-        DRAFT_PATH.write_text(content)
+        DRAFT_PATH.write_text(content, encoding='utf-8')
         return f"draft.md сохранён ({len(content)} симв)"
 
 
@@ -138,7 +141,7 @@ class AppendDraft(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = parse_args(params)["content"]
-        with DRAFT_PATH.open("a") as f:
+        with DRAFT_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
         return f"draft.md +{len(content)} симв (всего {DRAFT_PATH.stat().st_size})"
 
@@ -149,7 +152,7 @@ class ReadDraft(BaseTool):
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return DRAFT_PATH.read_text() if DRAFT_PATH.exists() else "(пусто)"
+        return DRAFT_PATH.read_text(encoding='utf-8') if DRAFT_PATH.exists() else "(пусто)"
 
 
 @register_tool("append_notes")
@@ -161,7 +164,7 @@ class AppendNotes(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = parse_args(params)["content"]
-        with NOTES_PATH.open("a") as f:
+        with NOTES_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
         return f"notes.md +{len(content)} симв (всего {NOTES_PATH.stat().st_size} симв)"
 
@@ -174,7 +177,7 @@ class ReadNotes(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         if not NOTES_PATH.exists():
             return "(заметок нет)"
-        text = NOTES_PATH.read_text()
+        text = NOTES_PATH.read_text(encoding='utf-8')
         return text[-20000:] if len(text) > 20000 else text
 
 
@@ -186,7 +189,7 @@ class WritePlan(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = parse_args(params)["content"]
-        PLAN_PATH.write_text(content)
+        PLAN_PATH.write_text(content, encoding='utf-8')
         todos = content.count("[TODO]")
         done = content.count("[DONE]")
         return f"plan.md: {todos} TODO, {done} DONE"
@@ -198,7 +201,7 @@ class ReadPlan(BaseTool):
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return PLAN_PATH.read_text() if PLAN_PATH.exists() else "(плана нет)"
+        return PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else "(плана нет)"
 
 
 @register_tool("write_synthesis")
@@ -210,7 +213,7 @@ class WriteSynthesis(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = parse_args(params)["content"]
-        SYNTHESIS_PATH.write_text(content)
+        SYNTHESIS_PATH.write_text(content, encoding='utf-8')
         tags = sum(content.count(t) for t in ("[BRIDGE]", "[CONTRADICTION]", "[GAP]", "[EXTRAPOLATION]", "[REUSE]", "[TESTABLE]"))
         return f"synthesis.md ({len(content)} симв, {tags} инсайтов)"
 
@@ -221,7 +224,7 @@ class ReadSynthesis(BaseTool):
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return SYNTHESIS_PATH.read_text() if SYNTHESIS_PATH.exists() else "(синтеза нет)"
+        return SYNTHESIS_PATH.read_text(encoding='utf-8') if SYNTHESIS_PATH.exists() else "(синтеза нет)"
 
 
 @register_tool("append_lessons")
@@ -233,7 +236,7 @@ class AppendLessons(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = parse_args(params)["content"]
-        with LESSONS_PATH.open("a") as f:
+        with LESSONS_PATH.open('a', encoding='utf-8') as f:
             f.write("\n" + content.strip() + "\n")
         return f"lessons.md +{len(content)} симв"
 
@@ -244,7 +247,7 @@ class ReadLessons(BaseTool):
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return LESSONS_PATH.read_text() if LESSONS_PATH.exists() else "(уроков ещё нет)"
+        return LESSONS_PATH.read_text(encoding='utf-8') if LESSONS_PATH.exists() else "(уроков ещё нет)"
 
 
 @register_tool("read_querylog")
@@ -255,7 +258,7 @@ class ReadQueryLog(BaseTool):
     def call(self, params: str, **kwargs) -> str:
         if not QUERYLOG_PATH.exists():
             return "(запросов ещё не было)"
-        text = QUERYLOG_PATH.read_text()
+        text = QUERYLOG_PATH.read_text(encoding='utf-8')
         lines, seen = [], set()
         for ln in reversed(text.splitlines()):
             if ln.strip() and ln not in seen:
@@ -304,17 +307,16 @@ class GithubSearch(BaseTool):
         else:
             fields = "path,url,repository"
 
-        try:
-            r = subprocess.run(
-                ["gh", "search", search_type, query,
-                 "--limit", str(limit), "--json", fields],
-                capture_output=True, text=True, timeout=20,
-            )
-        except FileNotFoundError:
+        r = cli_run.run(
+            ["gh", "search", search_type, query,
+             "--limit", str(limit), "--json", fields],
+            timeout=20,
+        )
+        if r.returncode == 127:
             return "ошибка: `gh` CLI не найден в PATH (установи: brew install gh)"
-        except subprocess.TimeoutExpired:
+        if r.returncode == 124:
             return "таймаут поиска GitHub"
-        if r.returncode != 0:
+        if not r.ok:
             err = r.stderr.strip()[:400]
             if "authentication" in err.lower() or "auth" in err.lower() or "login" in err.lower():
                 return "ошибка gh: нужна авторизация. Выполни в терминале: `gh auth login`"

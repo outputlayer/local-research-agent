@@ -45,9 +45,18 @@ def normalize_query(q: str) -> str:
 
 ARXIV_RE = re.compile(r"\b(\d{4}\.\d{4,5})\b")
 
+# Стоп-слова для keyword-overlap проверок (используются валидатором).
+STOPWORDS = frozenset({"paper", "paperов", "статья", "работа", "авторы", "model", "method"})
+
+
+def extract_ids(text: str) -> set[str]:
+    """Единая точка правды для извлечения arxiv-id из любого текста."""
+    return set(ARXIV_RE.findall(text or ""))
+
 
 def count_arxiv_ids(text: str) -> set[str]:
-    return set(ARXIV_RE.findall(text))
+    """Алиас для обратной совместимости — возвращает set id (не count)."""
+    return extract_ids(text)
 
 
 def keyword_set(s: str) -> set[str]:

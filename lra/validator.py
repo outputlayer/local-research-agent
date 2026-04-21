@@ -4,9 +4,7 @@ import re
 import subprocess
 
 from .config import DRAFT_PATH, NOTES_PATH
-from .utils import keyword_set
-
-_STOPWORDS = {"paper", "paperов", "статья", "работа", "авторы", "model", "method"}
+from .utils import STOPWORDS, extract_ids, keyword_set
 
 
 def validate_draft_ids(
@@ -28,14 +26,14 @@ def validate_draft_ids(
     if draft_text is None:
         if not DRAFT_PATH.exists():
             return 0, [], []
-        draft_text = DRAFT_PATH.read_text()
+        draft_text = DRAFT_PATH.read_text(encoding='utf-8')
     if notes_text is None:
-        notes_text = NOTES_PATH.read_text() if NOTES_PATH.exists() else ""
+        notes_text = NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else ""
 
-    ids = set(re.findall(r"\b(\d{4}\.\d{4,5})\b", draft_text))
+    ids = extract_ids(draft_text)
     if not ids:
         return 0, [], []
-    notes_ids = set(re.findall(r"\b(\d{4}\.\d{4,5})\b", notes_text))
+    notes_ids = extract_ids(notes_text)
     invalid, suspicious = [], []
     valid = 0
 
@@ -64,7 +62,7 @@ def validate_draft_ids(
             if pid in ln:
                 notes_ctx_parts.append(" ".join(notes_lines[max(0, i - 1):i + 3]))
         notes_ctx = " ".join(notes_ctx_parts)
-        draft_kw = keyword_set(draft_ctx) - _STOPWORDS
+        draft_kw = keyword_set(draft_ctx) - STOPWORDS
         notes_kw = keyword_set(notes_ctx)
         overlap = draft_kw & notes_kw
         if len(overlap) < 3:

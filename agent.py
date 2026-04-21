@@ -18,20 +18,18 @@ def _check_clis():
         print("   ✓ hf CLI найден")
     else:
         print("   ⚠️  hf CLI не найден (pip install huggingface_hub[cli]) — hf_papers не будет работать")
-    # gh
+    # gh — используем `gh api user --jq .login` (не зависит от локали)
     if not shutil.which("gh"):
         print("   ⚠️  gh CLI не найден (brew install gh) — github_search не будет работать")
         return
     try:
-        r = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=5)
-        out = (r.stdout + r.stderr).strip()
-        if r.returncode == 0 and "Logged in" in out:
-            # Достаём имя аккаунта
-            acc = ""
-            for ln in out.splitlines():
-                if "account" in ln.lower():
-                    acc = ln.strip(); break
-            print(f"   ✓ gh CLI: {acc or 'авторизован'}")
+        r = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            capture_output=True, text=True, timeout=5,
+        )
+        login = r.stdout.strip()
+        if r.returncode == 0 and login:
+            print(f"   ✓ gh CLI: авторизован как {login}")
         else:
             print("   ⚠️  gh CLI найден, но НЕ авторизован. Выполни: gh auth login")
     except Exception as e:

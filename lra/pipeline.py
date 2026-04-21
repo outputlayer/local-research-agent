@@ -42,7 +42,7 @@ def _run_agent(bot: Assistant, messages: list, icon: str) -> list:
 def _current_focus(query: str) -> str:
     if not PLAN_PATH.exists():
         return query
-    for line in PLAN_PATH.read_text().splitlines():
+    for line in PLAN_PATH.read_text(encoding='utf-8').splitlines():
         if line.strip().startswith("[FOCUS]"):
             return line.strip().replace("[FOCUS]", "").strip(" -—:") or query
     return query
@@ -68,7 +68,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     for i in range(1, depth + 1):
         focus = _current_focus(query)
         print(f"\n── итерация {i}/{depth} ──  🎯 FOCUS: {focus[:80]}")
-        ids_before = count_arxiv_ids(NOTES_PATH.read_text() if NOTES_PATH.exists() else "")
+        ids_before = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         before = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         msg = [{"role": "user",
                 "content": f"Исходная тема: {query}\n"
@@ -77,7 +77,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         _run_agent(explorer, msg, "🔎")
         after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         grew = after - before
-        ids_after = count_arxiv_ids(NOTES_PATH.read_text() if NOTES_PATH.exists() else "")
+        ids_after = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         new_ids = ids_after - ids_before
         print(f"   📝 notes: +{grew} симв ({after} всего)  📊 новых arxiv-id: {len(new_ids)}")
         if grew < 100:
@@ -87,19 +87,19 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                 "и СРАЗУ после этого append_notes с минимум 3 фактами и [arxiv-id]. "
                 "Затем append_lessons одной строкой.")}]
             _run_agent(explorer, retry, "🔁")
-            ids_after = count_arxiv_ids(NOTES_PATH.read_text() if NOTES_PATH.exists() else "")
+            ids_after = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
             new_ids = ids_after - ids_before
 
         low_gain_streak = low_gain_streak + 1 if len(new_ids) < 2 else 0
 
         print("   🧭 replanner обновляет план...")
-        plan_before = PLAN_PATH.read_text() if PLAN_PATH.exists() else ""
+        plan_before = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
         _run_agent(replanner,
                    [{"role": "user",
                      "content": f"Исходная тема: {query}. Обнови plan.md: Digest, Direction check, "
                                 "новый [FOCUS], пересортируй [TODO]. Используй write_plan."}],
                    "🧭")
-        plan_text = PLAN_PATH.read_text() if PLAN_PATH.exists() else ""
+        plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
         if plan_text == plan_before:
             print("   ⚠️  план не обновился — retry")
             _run_agent(replanner,
@@ -107,7 +107,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                            "ПРОВАЛ: ты НЕ вызвал write_plan. Прочитай read_notes, затем ОБЯЗАТЕЛЬНО "
                            "вызови write_plan с новым Digest, новым [FOCUS] и обновлённым [TODO].")}],
                        "🔁")
-            plan_text = PLAN_PATH.read_text() if PLAN_PATH.exists() else ""
+            plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
         new_focus = _current_focus(query)
         if new_focus != focus:
             print(f"   🔀 вектор скорректирован: {focus[:50]} → {new_focus[:50]}")
@@ -179,7 +179,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
             print(f"   ⚠️  слабое совпадение цитаты с notes: {suspicious}")
             print("       (id существует, но текст вокруг него в draft'е не отражает факты из notes)")
         print(f"\n📄 Итог: {DRAFT_PATH}\n" + "─" * 60)
-        print(DRAFT_PATH.read_text())
+        print(DRAFT_PATH.read_text(encoding='utf-8'))
         print("─" * 60)
         print(f"Файлы: {NOTES_PATH.name}, {PLAN_PATH.name}, {DRAFT_PATH.name}")
     else:
