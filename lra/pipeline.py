@@ -1,6 +1,7 @@
 """Оркестратор пайплайна: explorer ↔ replanner → synthesizer → writer ↔ critic → validator."""
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -8,8 +9,11 @@ from qwen_agent.agents import Assistant
 from qwen_agent.utils.output_beautify import typewriter_print
 
 # Импорт tools обязателен для @register_tool — не удалять даже если не используется прямо
+# Импорт llm — для регистрации @register_llm("mlx") (иначе resume_research при запуске
+# без предварительной загрузки модели через agent.py упадёт на 'Please set model_type').
 from . import cli as cli_run
 from . import kb as kb_mod
+from . import llm as _llm_register  # noqa: F401
 from . import plan as plan_mod
 from . import tools  # noqa: F401
 from .config import CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR, SYNTHESIS_PATH
@@ -389,6 +393,60 @@ def _fallback_draft_from_kb(query: str) -> None:
           f"({DRAFT_PATH.stat().st_size} симв)")
 
 
+_CITATION_LINKY_RE = re.compile(r"\[`?([^`\]\s]+?)`?\]\((arxiv-id|repo:\s*[^)]+)\)")
+_CITATION_BT_RE = re.compile(r"`(\d{4}\.\d{4,6}(?:v\d+)?)`")
+_CITATION_INNER_BT_RE = re.compile(r"\[`([^`\]]+)`\]")
+_CITATION_NESTED_RE = re.compile(r"\[((?:\[[^\[\]]+\]\s*,\s*)+\[[^\[\]]+\])\]")
+_CITATION_DANGLING_RE = re.compile(r"(\][^\n]{0,40}?)\s*\((arxiv-id|repo:\s*[^)]+)\)")
+
+
+def _normalize_citations(text: str) -> str:
+    r"""Чинит уродливый стиль `[`id`](arxiv-id)` / `[`id`](repo: X)` → плоский `[id]` / `[id, repo: X]`.
+
+    Нормализует распространённые формы, которые модель любит генерить:
+      1. ``[`2510.15624`](arxiv-id)`` → ``[2510.15624]``
+      2. ``[`2510.15624`](repo: freephdlabor)`` → ``[2510.15624, repo: freephdlabor]``
+      3. голый ```2506.09440``` → ``[2506.09440]``
+      4. ``[`synthesis`]`` → ``[synthesis]``
+      5. ``[[x], [y]]`` → ``[x, y]`` (склейка после шага 1)
+      6. висячий ``(arxiv-id)`` / ``(repo: X)`` после ``[id]`` — удаляется
+    """
+
+    def _linky(m: re.Match) -> str:
+        ident, target = m.group(1).strip(), m.group(2).strip()
+        if target.lower().startswith("repo:"):
+            repo = target.split(":", 1)[1].strip()
+            return f"[{ident}, repo: {repo}]"
+        return f"[{ident}]"
+
+    text = _CITATION_LINKY_RE.sub(_linky, text)
+    text = _CITATION_INNER_BT_RE.sub(lambda m: f"[{m.group(1)}]", text)
+    text = _CITATION_BT_RE.sub(lambda m: f"[{m.group(1)}]", text)
+
+    # Склейка вложенных [[a], [b]] → [a, b]
+    def _flatten(m: re.Match) -> str:
+        inner = m.group(1)
+        parts = re.findall(r"\[([^\[\]]+)\]", inner)
+        return "[" + ", ".join(p.strip() for p in parts) + "]"
+
+    text = _CITATION_NESTED_RE.sub(_flatten, text)
+    # Висячий (arxiv-id)/(repo: X) сразу после ] — убираем
+    text = _CITATION_DANGLING_RE.sub(r"\1", text)
+    return text
+
+
+def _normalize_draft_file() -> bool:
+    """Применяет _normalize_citations к draft.md inplace. Возвращает True если были правки."""
+    if not DRAFT_PATH.exists():
+        return False
+    original = DRAFT_PATH.read_text(encoding="utf-8")
+    fixed = _normalize_citations(original)
+    if fixed != original:
+        DRAFT_PATH.write_text(fixed, encoding="utf-8")
+        return True
+    return False
+
+
 def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None:
     """Фаза 2 (writer) + 3 (critic) + 4 (validator). Выделена для переиспользования
     в resume_research: позволяет дописать отчёт если phase 1 уже прошла но draft пустой.
@@ -429,6 +487,10 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
     if _draft_too_small():
         print("   ❌ writer провалился и после retry — fallback на программный сбор из KB")
         _fallback_draft_from_kb(query)
+
+    # Нормализация цитат: `[\`id\`](arxiv-id)` / `[\`id\`](repo: X)` → `[id]` / `[id, repo: X]`
+    if _normalize_draft_file():
+        print("   🧹 нормализованы цитаты в draft.md")
 
     # Фаза 3 — critic с конвергенцией
     print(f"\n🔍 Фаза 3: критик ({critic_rounds} раунд(ов))")
@@ -478,6 +540,7 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
                             "content": f"Критика:\n{critique}\n\nПерепиши через write_draft."})
         resp = _run_agent(writer, writer_msgs, "✍️ ")
         writer_msgs.extend(resp)
+        _normalize_draft_file()
 
     if DRAFT_PATH.exists():
         print("\n🔐 Фаза 4: валидация цитат (hf info + keyword overlap с notes)")
