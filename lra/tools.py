@@ -129,6 +129,13 @@ class RunPython(BaseTool):
                    "(без сети, 5с CPU, 512MB RAM). Возвращает stdout+stderr.")
     parameters = [{"name": "code", "type": "string", "description": "Код", "required": True}]
 
+    # SECURITY CAVEAT: песочница — best-effort для кода, который генерирует НАША локальная LLM.
+    # RLIMIT_AS/CPU + monkey-patch на socket и builtins.open блокируют обычные побеги,
+    # но НЕ защищают от ctypes, низкоуровневого syscall, socket.socketpair, mach-api на
+    # macOS, и bug'ов в самом CPython. Это НЕ sandbox для untrusted-input из сети.
+    # Никогда не подавать сюда код, пришедший от внешнего пользователя / веб-формы / API.
+    # Для этого нужен nsjail / bubblewrap / Docker — тяжёлая артиллерия, у нас не окупается.
+
     def call(self, params: str, **kwargs) -> str:
         code = parse_args(params)["code"]
         try:
@@ -344,23 +351,20 @@ class GithubSearch(BaseTool):
     # хотя gh CLI принимает их отдельными флагами.
     _QUALIFIER_RE = None  # lazy-инициализация в call()
 
-    def call(self, params: str, **kwargs) -> str:
+    @staticmethod
+    def _parse_qualifiers(raw_query: str) -> tuple[str, int | None, str | None]:
+        """Достаёт `stars:>=N` и `language:X` из query, возвращает очищенный query и флаги.
+
+        Извлечено из GithubSearch.call чтобы снизить CCN основной функции.
+        Поведение идентично: regex тот же (lazy-init на классе), итерация та же,
+        валидация та же.
+        """
         import re
         if GithubSearch._QUALIFIER_RE is None:
             GithubSearch._QUALIFIER_RE = re.compile(
                 r"\b(stars|language|lang|forks|size|pushed|created|user|org|topic|in|is):[\w:>=<.+/-]+",
                 re.IGNORECASE,
             )
-        p = parse_args(params)
-        raw_query = p.get("query", "") or ""
-        if not raw_query:
-            return "ошибка: query обязателен"
-        search_type = p.get("type", "repos").strip().lower()
-        if search_type not in ("repos", "code"):
-            search_type = "repos"
-        limit = max(1, min(int(p.get("limit", 5)), 10))
-
-        # Вынимаем qualifiers из query → отдельные флаги
         extracted_min_stars: int | None = None
         extracted_language: str | None = None
         for m in GithubSearch._QUALIFIER_RE.finditer(raw_query):
@@ -376,6 +380,65 @@ class GithubSearch(BaseTool):
         cleaned_query = GithubSearch._QUALIFIER_RE.sub("", raw_query).strip()
         # схлопываем двойные пробелы
         cleaned_query = " ".join(cleaned_query.split())
+        return cleaned_query, extracted_min_stars, extracted_language
+
+    @staticmethod
+    def _format_repo_results(data: list, cleaned_query: str) -> tuple[list[str], int]:
+        """Форматирует repos-ответ от `gh search repos` + автосейв в kb (только ≥10★).
+
+        Извлечено из GithubSearch.call. Побочный эффект (kb_mod.add) сохранён —
+        критерий автосейва (name!="?" и stars>=10) не меняется.
+        """
+        lines: list[str] = []
+        auto_saved = 0
+        for item in data:
+            name = item.get("fullName", "?")
+            url = item.get("url", "")
+            desc = (item.get("description") or "").strip()[:120]
+            stars = item.get("stargazersCount", 0)
+            lang = item.get("language") or ""
+            pushed = (item.get("pushedAt") or "")[:10]
+            lines.append(
+                f"★{stars:>6}  [{name}]({url})  {lang}  updated:{pushed}\n"
+                f"         {desc}"
+            )
+            # Автосейв: только репо с ≥10 звёзд — отсекает мусор и форки без описания.
+            if name != "?" and stars >= 10:
+                try:
+                    kb_mod.add(kb_mod.Atom(
+                        id=name, kind="repo", topic=cleaned_query,
+                        title=name, url=url,
+                        stars=int(stars or 0), lang=lang,
+                        claim=desc or f"{lang} репозиторий, {stars}★",
+                    ))
+                    auto_saved += 1
+                except Exception as e:
+                    log.debug("kb auto-save repo failed %s: %s", name, e)
+        return lines, auto_saved
+
+    @staticmethod
+    def _format_code_results(data: list) -> list[str]:
+        """Форматирует code-ответ от `gh search code`. Без побочных эффектов."""
+        lines: list[str] = []
+        for item in data:
+            path = item.get("path", "")
+            url = item.get("url", "")
+            repo = (item.get("repository") or {}).get("fullName", "?")
+            lines.append(f"[{repo}] {path}\n  {url}")
+        return lines
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        raw_query = p.get("query", "") or ""
+        if not raw_query:
+            return "ошибка: query обязателен"
+        search_type = p.get("type", "repos").strip().lower()
+        if search_type not in ("repos", "code"):
+            search_type = "repos"
+        limit = max(1, min(int(p.get("limit", 5)), 10))
+
+        # Вынимаем qualifiers из query → отдельные флаги
+        cleaned_query, extracted_min_stars, extracted_language = self._parse_qualifiers(raw_query)
         if not cleaned_query:
             return "ошибка: после удаления qualifiers query пустой — пиши 2-4 ключевых слова"
 
@@ -439,38 +502,11 @@ class GithubSearch(BaseTool):
                 hint = f" — попробуй БЕЗ language='{language}'"
             return f"нет результатов на GitHub: '{cleaned_query}'{hint}"
 
-        lines = []
-        auto_saved = 0
         if search_type == "repos":
-            for item in data:
-                name = item.get("fullName", "?")
-                url = item.get("url", "")
-                desc = (item.get("description") or "").strip()[:120]
-                stars = item.get("stargazersCount", 0)
-                lang = item.get("language") or ""
-                pushed = (item.get("pushedAt") or "")[:10]
-                lines.append(
-                    f"★{stars:>6}  [{name}]({url})  {lang}  updated:{pushed}\n"
-                    f"         {desc}"
-                )
-                # Автосейв: только репо с ≥10 звёзд — отсекает мусор и форки без описания.
-                if name != "?" and stars >= 10:
-                    try:
-                        kb_mod.add(kb_mod.Atom(
-                            id=name, kind="repo", topic=cleaned_query,
-                            title=name, url=url,
-                            stars=int(stars or 0), lang=lang,
-                            claim=desc or f"{lang} репозиторий, {stars}★",
-                        ))
-                        auto_saved += 1
-                    except Exception as e:
-                        log.debug("kb auto-save repo failed %s: %s", name, e)
-        else:  # code
-            for item in data:
-                path = item.get("path", "")
-                url = item.get("url", "")
-                repo = (item.get("repository") or {}).get("fullName", "?")
-                lines.append(f"[{repo}] {path}\n  {url}")
+            lines, auto_saved = self._format_repo_results(data, cleaned_query)
+        else:
+            lines = self._format_code_results(data)
+            auto_saved = 0
 
         footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
         return "\n\n".join(lines) + footer
