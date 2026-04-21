@@ -49,9 +49,11 @@ def validate_draft_ids(
                     capture_output=True, text=True, timeout=15,
                 )
                 if r.returncode != 0 or "not found" in (r.stdout + r.stderr).lower():
-                    invalid.append(pid); continue
+                    invalid.append(pid)
+                    continue
             except Exception:
-                invalid.append(pid); continue
+                invalid.append(pid)
+                continue
             valid += 1
             continue
         draft_ctx = " ".join(

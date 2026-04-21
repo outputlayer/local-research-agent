@@ -50,7 +50,8 @@ def main():
         try:
             q = input("🔬 ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\n👋"); return
+            print("\n👋")
+            return
         if not q:
             continue
         if q == "/exit":
@@ -70,7 +71,8 @@ def main():
         if q.startswith("/research"):
             q = q[len("/research"):].strip()
         if not q:
-            print("⚠️  укажи тему\n"); continue
+            print("⚠️  укажи тему\n")
+            continue
         research_loop(q, depth=6, critic_rounds=2)
         print()
 

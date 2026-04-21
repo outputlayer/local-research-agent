@@ -110,8 +110,10 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         # Прогреваем disk-cache параллельно — hf+gh одновременно, до первого LLM-вызова
         pf = prefetch_iteration(focus)
         cached_marks = []
-        if pf["hf_cached"]: cached_marks.append("hf")
-        if pf["gh_cached"]: cached_marks.append("gh")
+        if pf["hf_cached"]:
+            cached_marks.append("hf")
+        if pf["gh_cached"]:
+            cached_marks.append("gh")
         cache_note = f" (из кеша: {','.join(cached_marks)})" if cached_marks else ""
         print(f"   ⚡ prefetch hf+gh параллельно: {pf['elapsed']:.1f}с{cache_note}")
         ids_before = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
@@ -176,9 +178,13 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         ))
 
         if "PLAN_COMPLETE" in plan_text:
-            print("✅ План исчерпан"); metrics.stopped_early_reason = "PLAN_COMPLETE"; break
+            print("✅ План исчерпан")
+            metrics.stopped_early_reason = "PLAN_COMPLETE"
+            break
         if "[TODO]" not in plan_text and i > 1:
-            print("✅ Нет больше [TODO]"); metrics.stopped_early_reason = "NO_TODO"; break
+            print("✅ Нет больше [TODO]")
+            metrics.stopped_early_reason = "NO_TODO"
+            break
         if low_gain_streak >= 2 and i >= 3:
             print("✅ Ранний стоп: 2 итерации подряд < 2 новых id")
             metrics.stopped_early_reason = "LOW_GAIN"
@@ -234,7 +240,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         print(f"   📋 правок у критика: {issues}")
         if approved:
             metrics.critic_rounds.append(CriticRound(round=i, issues_found=0, approved=True, seconds=c_seconds))
-            print("✅ критик одобрил"); break
+            print("✅ критик одобрил")
+            break
         if prev_critique:
             sim = jaccard(keyword_set(prev_critique), keyword_set(critique))
             if sim > 0.70:
@@ -242,7 +249,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                 metrics.critic_rounds.append(CriticRound(
                     round=i, issues_found=issues, approved=False,
                     converged_by_similarity=True, seconds=c_seconds))
-                print(f"✅ критик зациклился (сходство {sim:.0%}) — выходим"); break
+                print(f"✅ критик зациклился (сходство {sim:.0%}) — выходим")
+                break
         metrics.critic_rounds.append(CriticRound(
             round=i, issues_found=issues, approved=False,
             converged_by_similarity=converged, seconds=c_seconds))
