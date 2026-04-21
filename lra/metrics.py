@@ -3,15 +3,14 @@
 Экспортируются в research/metrics.json для внешней аналитики и integration-тестов.
 """
 from __future__ import annotations
+
 import json
 import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from .config import RESEARCH_DIR
-
 
 METRICS_PATH = RESEARCH_DIR / "metrics.json"
 
@@ -43,7 +42,7 @@ class CriticRound:
 class RunMetrics:
     query: str
     started_at: float = field(default_factory=time.time)
-    finished_at: Optional[float] = None
+    finished_at: float | None = None
     iterations: list[IterationMetric] = field(default_factory=list)
     critic_rounds: list[CriticRound] = field(default_factory=list)
     synthesis_seconds: float = 0.0
@@ -52,14 +51,14 @@ class RunMetrics:
     invalid_ids: list[str] = field(default_factory=list)
     suspicious_citations: list[str] = field(default_factory=list)
     final_draft_chars: int = 0
-    stopped_early_reason: Optional[str] = None
+    stopped_early_reason: str | None = None
 
     @property
     def total_seconds(self) -> float:
         end = self.finished_at or time.time()
         return end - self.started_at
 
-    def finish(self, path: Optional[Path] = None) -> Path:
+    def finish(self, path: Path | None = None) -> Path:
         """Сохраняет метрики в JSON. Вызывается в конце research_loop."""
         self.finished_at = time.time()
         target = path or METRICS_PATH

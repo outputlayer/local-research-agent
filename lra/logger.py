@@ -1,10 +1,10 @@
 """Единая настройка логирования. Пишет в research/run.log + stderr (WARNING+)."""
 from __future__ import annotations
+
 import logging
 from pathlib import Path
 
 from .config import CFG, RUN_LOG_PATH
-
 
 _CONFIGURED = False
 

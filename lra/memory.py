@@ -1,10 +1,19 @@
 """Управление Reflexion-памятью: lessons, querylog, архивы."""
 from __future__ import annotations
+
 import re
 from datetime import datetime
 
-from .config import (ARCHIVE_DIR, DRAFT_PATH, LESSONS_PATH, NOTES_PATH,
-                     PLAN_PATH, QUERYLOG_PATH, RESEARCH_DIR, SYNTHESIS_PATH)
+from .config import (
+    ARCHIVE_DIR,
+    DRAFT_PATH,
+    LESSONS_PATH,
+    NOTES_PATH,
+    PLAN_PATH,
+    QUERYLOG_PATH,
+    RESEARCH_DIR,
+    SYNTHESIS_PATH,
+)
 from .utils import normalize_query
 
 

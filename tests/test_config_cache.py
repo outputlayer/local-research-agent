@@ -3,8 +3,8 @@ import json
 
 import pytest
 
-from lra.config import Settings
 from lra import cache
+from lra.config import Settings
 
 
 def test_settings_valid(tmp_path):

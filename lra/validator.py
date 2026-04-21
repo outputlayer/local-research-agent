@@ -1,5 +1,6 @@
 """Валидация arXiv-id в черновике: существование + семантическая связь с notes."""
 from __future__ import annotations
+
 import re
 import subprocess
 

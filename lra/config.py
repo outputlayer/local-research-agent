@@ -1,5 +1,6 @@
 """Конфиг и пути к артефактам."""
 from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -37,7 +38,7 @@ class Settings:
             raise ValueError(f"max_tokens <= 0: {self.max_tokens}")
 
     @classmethod
-    def load(cls, path: Path | None = None) -> "Settings":
+    def load(cls, path: Path | None = None) -> Settings:
         p = path or _CFG_FILE
         raw: dict[str, Any] = json.loads(p.read_text(encoding="utf-8"))
         known = {f.name for f in fields(cls) if f.name != "extra"}

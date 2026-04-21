@@ -1,5 +1,6 @@
 """Все tools для qwen-agent."""
 from __future__ import annotations
+
 import json
 import subprocess
 import sys
@@ -7,8 +8,7 @@ import sys
 from qwen_agent.tools.base import BaseTool, register_tool
 
 from . import cli as cli_run
-from .config import (DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH,
-                     QUERYLOG_PATH, SYNTHESIS_PATH)
+from .config import DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
 from .logger import get_logger
 from .memory import ensure_dir, log_query, seen_queries
 from .utils import normalize_query, parse_args

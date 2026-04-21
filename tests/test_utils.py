@@ -1,6 +1,5 @@
 """Юниты для чистых утилит — без MLX, без сети."""
-from lra.utils import (count_arxiv_ids, jaccard, keyword_set, normalize_query,
-                       parse_args)
+from lra.utils import extract_ids, jaccard, keyword_set, normalize_query, parse_args
 
 
 class TestParseArgs:
@@ -43,15 +42,15 @@ class TestNormalizeQuery:
 class TestCountArxivIds:
     def test_extracts_ids(self):
         text = "See [2301.12345] and [2404.00001] for details."
-        assert count_arxiv_ids(text) == {"2301.12345", "2404.00001"}
+        assert extract_ids(text) == {"2301.12345", "2404.00001"}
 
     def test_no_false_positives(self):
         # 3 цифры после точки — не arXiv
-        assert count_arxiv_ids("version 1.23 and date 2024") == set()
+        assert extract_ids("version 1.23 and date 2024") == set()
 
     def test_dedup(self):
         text = "[2301.12345] is cited again as [2301.12345]"
-        assert count_arxiv_ids(text) == {"2301.12345"}
+        assert extract_ids(text) == {"2301.12345"}
 
 
 class TestKeywordSet:

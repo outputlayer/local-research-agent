@@ -1,8 +1,8 @@
 """Оркестратор пайплайна: explorer ↔ replanner → synthesizer → writer ↔ critic → validator."""
 from __future__ import annotations
+
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
 
 from qwen_agent.agents import Assistant
 from qwen_agent.utils.output_beautify import typewriter_print
@@ -10,13 +10,19 @@ from qwen_agent.utils.output_beautify import typewriter_print
 # Импорт tools обязателен для @register_tool — не удалять даже если не используется прямо
 from . import cli as cli_run
 from . import tools  # noqa: F401
-from .config import (CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR)
+from .config import CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR
 from .logger import get_logger
 from .memory import reset_research
 from .metrics import CriticRound, IterationMetric, RunMetrics, count_critic_issues
-from .prompts import (COMPRESSOR_PROMPT, CRITIC_PROMPT, EXPLORER_PROMPT,
-                      REPLANNER_PROMPT, SYNTHESIZER_PROMPT, WRITER_PROMPT)
-from .utils import count_arxiv_ids, jaccard, keyword_set
+from .prompts import (
+    COMPRESSOR_PROMPT,
+    CRITIC_PROMPT,
+    EXPLORER_PROMPT,
+    REPLANNER_PROMPT,
+    SYNTHESIZER_PROMPT,
+    WRITER_PROMPT,
+)
+from .utils import extract_ids, jaccard, keyword_set
 from .validator import validate_draft_ids
 
 log = get_logger("pipeline")
@@ -47,7 +53,7 @@ def prefetch_iteration(focus: str, limit: int = 5, hf_timeout: int = 30, gh_time
             "hf_cached": r_hf.from_cache, "gh_cached": r_gh.from_cache}
 
 
-def build_bot(system_message: str, tool_names: list, max_tokens: Optional[int] = None) -> Assistant:
+def build_bot(system_message: str, tool_names: list, max_tokens: int | None = None) -> Assistant:
     llm_cfg = {
         "model": CFG["model"],
         "model_type": "mlx",
@@ -108,7 +114,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         if pf["gh_cached"]: cached_marks.append("gh")
         cache_note = f" (из кеша: {','.join(cached_marks)})" if cached_marks else ""
         print(f"   ⚡ prefetch hf+gh параллельно: {pf['elapsed']:.1f}с{cache_note}")
-        ids_before = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
+        ids_before = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         before = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         t_exp = time.time()
         msg = [{"role": "user",
@@ -119,7 +125,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         explorer_seconds = time.time() - t_exp
         after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         grew = after - before
-        ids_after = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
+        ids_after = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         new_ids = ids_after - ids_before
         print(f"   📝 notes: +{grew} симв ({after} всего)  📊 новых arxiv-id: {len(new_ids)}")
         if grew < 100:
@@ -129,7 +135,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                 "и СРАЗУ после этого append_notes с минимум 3 фактами и [arxiv-id]. "
                 "Затем append_lessons одной строкой.")}]
             _run_agent(explorer, retry, "🔁")
-            ids_after = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
+            ids_after = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
             new_ids = ids_after - ids_before
 
         low_gain_streak = low_gain_streak + 1 if len(new_ids) < 2 else 0

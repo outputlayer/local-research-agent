@@ -1,8 +1,7 @@
 """Тесты метрик итераций и парсера критики."""
 import json
 
-from lra.metrics import (CriticRound, IterationMetric, RunMetrics,
-                          count_critic_issues)
+from lra.metrics import CriticRound, IterationMetric, RunMetrics, count_critic_issues
 
 
 def test_count_critic_issues_approved():

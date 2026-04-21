@@ -1,7 +1,9 @@
 """Чистые утилиты без побочных эффектов (легко тестируются)."""
 from __future__ import annotations
+
 import json
 import re
+
 import json5
 
 
@@ -52,11 +54,6 @@ STOPWORDS = frozenset({"paper", "paperов", "статья", "работа", "а
 def extract_ids(text: str) -> set[str]:
     """Единая точка правды для извлечения arxiv-id из любого текста."""
     return set(ARXIV_RE.findall(text or ""))
-
-
-def count_arxiv_ids(text: str) -> set[str]:
-    """Алиас для обратной совместимости — возвращает set id (не count)."""
-    return extract_ids(text)
 
 
 def keyword_set(s: str) -> set[str]:

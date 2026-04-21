@@ -1,10 +1,10 @@
 """Простой TTL-кеш для CLI-вызовов (hf/gh). Ключ=hash(команды), значение=stdout+returncode."""
 from __future__ import annotations
+
 import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Optional
 
 from .config import CACHE_DIR, CFG
 
@@ -19,7 +19,7 @@ def _key(cmd: list[str]) -> str:
     return h
 
 
-def get(cmd: list[str], ttl_hours: Optional[float] = None) -> Optional[dict]:
+def get(cmd: list[str], ttl_hours: float | None = None) -> dict | None:
     """Возвращает {stdout, stderr, returncode} или None если кеш-мисс / протух."""
     ttl = (ttl_hours if ttl_hours is not None else CFG.cache_ttl_hours) * 3600
     f = _ensure_cache_dir() / f"{_key(cmd)}.json"

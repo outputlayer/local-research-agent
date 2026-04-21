@@ -1,8 +1,8 @@
 """Обёртка над subprocess.run с дисковым кешем и единообразной обработкой ошибок."""
 from __future__ import annotations
+
 import subprocess
 from dataclasses import dataclass
-from typing import Optional
 
 from . import cache
 from .logger import get_logger
@@ -27,8 +27,8 @@ def run(
     *,
     timeout: int = 30,
     use_cache: bool = True,
-    cache_ttl_hours: Optional[float] = None,
-    input_str: Optional[str] = None,
+    cache_ttl_hours: float | None = None,
+    input_str: str | None = None,
 ) -> CliResult:
     """Запускает CLI-команду с опциональным дисковым кешем.
 

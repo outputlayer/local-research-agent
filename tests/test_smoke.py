@@ -17,8 +17,9 @@ def test_prompts_present():
 
 
 def test_tools_registered():
-    from lra import tools  # noqa: F401
     from qwen_agent.tools.base import TOOL_REGISTRY
+
+    from lra import tools  # noqa: F401
     for t in ("hf_papers", "run_python", "write_draft", "append_draft",
               "read_notes", "write_plan", "read_querylog", "append_lessons",
               "github_search"):

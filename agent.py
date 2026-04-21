@@ -5,8 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 
-from lra.config import (CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH,
-                        QUERYLOG_PATH, SYNTHESIS_PATH)
+from lra.config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, QUERYLOG_PATH, SYNTHESIS_PATH
 from lra.llm import get_mlx
 from lra.pipeline import research_loop
 

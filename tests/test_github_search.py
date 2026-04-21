@@ -8,7 +8,8 @@ from lra.cli import CliResult
 
 @pytest.fixture
 def gh_tool(tmp_path, monkeypatch):
-    from lra import memory, tools as tools_mod
+    from lra import memory
+    from lra import tools as tools_mod
     ql = tmp_path / "querylog.md"
     monkeypatch.setattr(memory, "QUERYLOG_PATH", ql)
     monkeypatch.setattr(memory, "RESEARCH_DIR", tmp_path)
