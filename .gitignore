@@ -10,11 +10,14 @@ workspace/
 research/draft.md
 research/notes.md
 research/plan.md
+research/plan.json
 research/synthesis.md
 research/lessons.md
 research/querylog.md
 research/run.log
 research/archive/
+research/kb.jsonl
+research/metrics.json
 
 # HF/MLX кэш + наш disk-cache для hf/gh CLI
 .cache/
