@@ -13,6 +13,7 @@ from . import tools  # noqa: F401
 from .config import (CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR)
 from .logger import get_logger
 from .memory import reset_research
+from .metrics import CriticRound, IterationMetric, RunMetrics, count_critic_issues
 from .prompts import (COMPRESSOR_PROMPT, CRITIC_PROMPT, EXPLORER_PROMPT,
                       REPLANNER_PROMPT, SYNTHESIZER_PROMPT, WRITER_PROMPT)
 from .utils import count_arxiv_ids, jaccard, keyword_set
@@ -83,6 +84,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     """Полный пайплайн: explorer/replanner (×depth) → compressor → synthesizer →
     writer/critic (×critic_rounds) → validator цитат."""
     reset_research(query)
+    metrics = RunMetrics(query=query)
     print(f"📁 Рабочая папка: {RESEARCH_DIR}\n")
 
     explorer = build_bot(EXPLORER_PROMPT,
@@ -108,11 +110,13 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         print(f"   ⚡ prefetch hf+gh параллельно: {pf['elapsed']:.1f}с{cache_note}")
         ids_before = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         before = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
+        t_exp = time.time()
         msg = [{"role": "user",
                 "content": f"Исходная тема: {query}\n"
                            f"Текущий [FOCUS] из plan.md: {focus}\n"
                            "Сделай одну итерацию по [FOCUS]. ОБЯЗАТЕЛЬНО append_notes и append_lessons."}]
         _run_agent(explorer, msg, "🔎")
+        explorer_seconds = time.time() - t_exp
         after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         grew = after - before
         ids_after = count_arxiv_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
@@ -132,11 +136,13 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
 
         print("   🧭 replanner обновляет план...")
         plan_before = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
+        t_rep = time.time()
         _run_agent(replanner,
                    [{"role": "user",
                      "content": f"Исходная тема: {query}. Обнови plan.md: Digest, Direction check, "
                                 "новый [FOCUS], пересортируй [TODO]. Используй write_plan."}],
                    "🧭")
+        replanner_seconds = time.time() - t_rep
         plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
         if plan_text == plan_before:
             print("   ⚠️  план не обновился — retry")
@@ -147,14 +153,30 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                        "🔁")
             plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
         new_focus = _current_focus(query)
-        if new_focus != focus:
+        focus_changed = new_focus != focus
+        if focus_changed:
             print(f"   🔀 вектор скорректирован: {focus[:50]} → {new_focus[:50]}")
+
+        metrics.iterations.append(IterationMetric(
+            iteration=i, focus=focus[:200],
+            prefetch_seconds=pf["elapsed"],
+            explorer_seconds=explorer_seconds,
+            replanner_seconds=replanner_seconds,
+            notes_grew_chars=grew,
+            new_arxiv_ids=len(new_ids),
+            hf_from_cache=pf.get("hf_cached", False),
+            gh_from_cache=pf.get("gh_cached", False),
+            focus_changed=focus_changed,
+        ))
+
         if "PLAN_COMPLETE" in plan_text:
-            print("✅ План исчерпан"); break
+            print("✅ План исчерпан"); metrics.stopped_early_reason = "PLAN_COMPLETE"; break
         if "[TODO]" not in plan_text and i > 1:
-            print("✅ Нет больше [TODO]"); break
+            print("✅ Нет больше [TODO]"); metrics.stopped_early_reason = "NO_TODO"; break
         if low_gain_streak >= 2 and i >= 3:
-            print("✅ Ранний стоп: 2 итерации подряд < 2 новых id"); break
+            print("✅ Ранний стоп: 2 итерации подряд < 2 новых id")
+            metrics.stopped_early_reason = "LOW_GAIN"
+            break
 
     # Фаза 1.5 — компрессия
     notes_size = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
@@ -168,9 +190,11 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     synthesizer = build_bot(SYNTHESIZER_PROMPT,
                             ["read_plan", "read_notes", "write_synthesis", "run_python"],
                             max_tokens=4096)
+    t_syn = time.time()
     _run_agent(synthesizer,
                [{"role": "user", "content": f"Произведи пять типов инсайтов по теме: {query}"}],
                "💡")
+    metrics.synthesis_seconds = time.time() - t_syn
 
     # Фаза 2 — writer
     print("\n✍️  Фаза 2: writer — финальный черновик")
@@ -179,7 +203,9 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                         "write_draft", "append_draft"],
                        max_tokens=6144)
     writer_msgs = [{"role": "user", "content": f"Собери финальный отчёт по теме: {query}"}]
+    t_wr = time.time()
     resp = _run_agent(writer, writer_msgs, "✍️ ")
+    metrics.writer_seconds = time.time() - t_wr
     writer_msgs.extend(resp)
 
     # Фаза 3 — critic с конвергенцией
@@ -190,16 +216,30 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     prev_critique = ""
     for i in range(1, critic_rounds + 1):
         print(f"\n── критика {i}/{critic_rounds} ──")
+        t_cr = time.time()
         c_resp = _run_agent(critic,
                             [{"role": "user", "content": f"Оцени черновик по теме: {query}"}],
                             "🔍")
+        c_seconds = time.time() - t_cr
         critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
-        if "APPROVED" in critique.upper() and len(critique) < 60:
+        issues = count_critic_issues(critique)
+        approved = "APPROVED" in critique.upper() and len(critique) < 60
+        converged = False
+        print(f"   📋 правок у критика: {issues}")
+        if approved:
+            metrics.critic_rounds.append(CriticRound(round=i, issues_found=0, approved=True, seconds=c_seconds))
             print("✅ критик одобрил"); break
         if prev_critique:
             sim = jaccard(keyword_set(prev_critique), keyword_set(critique))
             if sim > 0.70:
+                converged = True
+                metrics.critic_rounds.append(CriticRound(
+                    round=i, issues_found=issues, approved=False,
+                    converged_by_similarity=True, seconds=c_seconds))
                 print(f"✅ критик зациклился (сходство {sim:.0%}) — выходим"); break
+        metrics.critic_rounds.append(CriticRound(
+            round=i, issues_found=issues, approved=False,
+            converged_by_similarity=converged, seconds=c_seconds))
         prev_critique = critique
         writer_msgs.append({"role": "user",
                             "content": f"Критика:\n{critique}\n\nПерепиши через write_draft."})
@@ -209,6 +249,9 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     if DRAFT_PATH.exists():
         print("\n🔐 Фаза 4: валидация цитат (hf info + keyword overlap с notes)")
         valid, invalid, suspicious = validate_draft_ids()
+        metrics.valid_ids = valid
+        metrics.invalid_ids = list(invalid)
+        metrics.suspicious_citations = list(suspicious)
         print(f"   ✓ валидных: {valid}")
         if invalid:
             print(f"   ✗ не найдены: {invalid}")
@@ -216,9 +259,15 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         if suspicious:
             print(f"   ⚠️  слабое совпадение цитаты с notes: {suspicious}")
             print("       (id существует, но текст вокруг него в draft'е не отражает факты из notes)")
+        metrics.final_draft_chars = DRAFT_PATH.stat().st_size
         print(f"\n📄 Итог: {DRAFT_PATH}\n" + "─" * 60)
         print(DRAFT_PATH.read_text(encoding='utf-8'))
         print("─" * 60)
         print(f"Файлы: {NOTES_PATH.name}, {PLAN_PATH.name}, {DRAFT_PATH.name}")
     else:
         print("⚠️  writer не сохранил черновик")
+
+    # Всегда сохраняем метрики — даже если draft не создался
+    metrics_path = metrics.finish()
+    print(f"📊 Метрики прогона: {metrics_path.relative_to(RESEARCH_DIR.parent)} "
+          f"({metrics.total_seconds:.1f}с, {len(metrics.iterations)} итераций)")
