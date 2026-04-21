@@ -23,7 +23,7 @@ from .config import (
 )
 from .logger import get_logger
 from .memory import ensure_dir, is_similar_to_seen, log_query, seen_queries
-from .utils import extract_ids, normalize_query, parse_args
+from .utils import extract_ids, get_content, normalize_query, parse_args
 
 log = get_logger("tools")
 
@@ -129,7 +129,7 @@ class CompactNotes(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
-        content = parse_args(params)["content"]
+        content = get_content(params)
         old = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         NOTES_PATH.write_text(content, encoding='utf-8')
         return f"notes.md: {old} → {len(content)} симв (сжато в {max(1, old // max(1, len(content)))}x)"
@@ -142,7 +142,7 @@ class WriteDraft(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
-        content = parse_args(params)["content"]
+        content = get_content(params)
         DRAFT_PATH.write_text(content, encoding='utf-8')
         return f"draft.md сохранён ({len(content)} симв)"
 
@@ -155,7 +155,7 @@ class AppendDraft(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
-        content = parse_args(params)["content"]
+        content = get_content(params)
         with DRAFT_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
         return f"draft.md +{len(content)} симв (всего {DRAFT_PATH.stat().st_size})"
@@ -178,7 +178,7 @@ class AppendNotes(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
-        content = parse_args(params)["content"]
+        content = get_content(params)
         # Pre-append verifier: блокируем запись, если в content есть arxiv-id,
         # которых нет в kb.jsonl (т.е. explorer их не находил через hf_papers/kb_search).
         # Это отсекает галлюцинации id на этапе записи.
@@ -284,7 +284,7 @@ class WritePlan(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
-        content = parse_args(params)["content"]
+        content = get_content(params)
         PLAN_PATH.write_text(content, encoding='utf-8')
         todos = content.count("[TODO]")
         done = content.count("[DONE]")
@@ -308,7 +308,7 @@ class WriteSynthesis(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
-        content = parse_args(params)["content"]
+        content = get_content(params)
         SYNTHESIS_PATH.write_text(content, encoding='utf-8')
         tags = sum(content.count(t) for t in ("[BRIDGE]", "[CONTRADICTION]", "[GAP]", "[EXTRAPOLATION]", "[REUSE]", "[TESTABLE]"))
         return f"synthesis.md ({len(content)} симв, {tags} инсайтов)"
@@ -331,7 +331,7 @@ class AppendLessons(BaseTool):
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
-        content = parse_args(params)["content"]
+        content = get_content(params)
         with LESSONS_PATH.open('a', encoding='utf-8') as f:
             f.write("\n" + content.strip() + "\n")
         return f"lessons.md +{len(content)} симв"

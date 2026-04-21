@@ -30,6 +30,26 @@ class TestParseArgs:
         out = parse_args(raw)
         assert "content" in out
 
+    def test_trailing_tool_call_tag_stripped(self):
+        # LLM иногда лепит хвост tool-call wrapper'а внутрь arguments —
+        # без pre-clean мы ловили это финальным fallback'ом и писали в файл
+        # СЫРОЙ JSON-блоб. Теперь должны получить clean content.
+        raw = '{"content": "hello world"}</arguments'
+        out = parse_args(raw)
+        assert out == {"content": "hello world"}
+
+    def test_trailing_garbage_after_balanced_braces_stripped(self):
+        raw = '{"content": "x"}garbage tail'
+        out = parse_args(raw)
+        assert out == {"content": "x"}
+
+    def test_escaped_quotes_in_content_preserved(self):
+        # Regex-fallback должен уважать \" — иначе ломались большие
+        # draft append'ы с inline-цитатами.
+        raw = r'{"content": "He said \"hi\" today"} extra'
+        out = parse_args(raw)
+        assert out["content"] == 'He said "hi" today'
+
 
 class TestNormalizeQuery:
     def test_lower_and_trim(self):
