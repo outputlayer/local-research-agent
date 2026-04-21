@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+.pytest_cache/
 workspace/
 
 # рабочие артефакты текущего прогона (восстанавливаются при запуске)

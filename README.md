@@ -22,14 +22,15 @@ explorer ↔ replanner  (×depth, адаптивный план)
 
 ## Ключевые фичи
 
-- **Один файл** (`agent.py`, ~880 строк), один конфиг (`chat_config.json`)
+- **Модульная архитектура**: пакет `lra/` — config, utils, memory, llm, tools, prompts, validator, pipeline. CLI `agent.py` тонкий
+- **Покрытие тестами**: 35 pytest-тестов (utils / memory / validator / smoke), запускаются без MLX за ~1с
 - **Одна загрузка модели** через глобальный кэш `_MLX_CACHE` — 6 ролей/агентов делят веса
 - **Кросс-сессионная Reflexion-память**: `lessons.md` и `querylog.md` не стираются между запусками
 - **Querylog enforcement**: `hf_papers` возвращает отказ на точный дубль запроса → модель вынуждена переформулировать
 - **Info-gain early stop**: если 2 итерации подряд дают <2 новых arXiv-id, ранний выход
 - **Адаптивный replanner**: после каждой итерации explorer'а переписывает `plan.md` со структурой `[FOCUS] / Digest / Direction check / [TODO] / [DONE]`
 - **Critic convergence**: цикл writer↔critic выходит если жаккард-сходство соседних критик >70%
-- **Валидатор цитат**: проверяет существование arXiv-id и семантическую связь текста вокруг id в draft'е с соответствующими фактами в notes
+- **Валидатор цитат**: проверяет существование arXiv-id и семантическую связь текста вокруг id в draft'е с фактами в notes
 - **Sandbox для `run_python`**: подпроцесс без сети, RLIMIT_CPU=5s, AS=512MB, запись только в `/tmp/`
 
 ## Tools (15)
@@ -63,10 +64,24 @@ python agent.py
 ## Структура
 
 ```
-agent.py              — весь пайплайн + 15 tools + MLX-бэкенд для Qwen-Agent
+agent.py              — тонкий CLI (входная точка)
 chat_config.json      — модель, температура, max_tokens, max_history
-requirements.txt      — mlx-lm, qwen-agent, json5
-research/
+requirements.txt      — mlx-lm, qwen-agent, json5, pytest
+lra/                  — пакет с логикой
+  config.py           — конфиг + пути артефактов
+  utils.py            — чистые функции (parse_args, keyword_set, jaccard, count_arxiv_ids)
+  memory.py           — Reflexion-память (seen_queries, archive, reset)
+  llm.py              — MLX-бэкенд для qwen-agent + кэш весов
+  tools.py            — 15 tools (@register_tool)
+  prompts.py          — промпты 6 ролей
+  validator.py        — проверка arXiv-id и keyword-overlap
+  pipeline.py         — research_loop, build_bot, фазы
+tests/
+  test_utils.py       — 14 тестов
+  test_memory.py      — 8 тестов (через tmp_path)
+  test_validator.py   — 5 тестов (с инжекцией текста)
+  test_smoke.py       — 5 smoke-тестов (не грузит MLX)
+research/             — рабочая папка (gitignored)
   draft.md            — финальный отчёт (stdout тоже)
   notes.md            — накопленные факты с [arxiv-id]
   plan.md             — живой план с [FOCUS]/[TODO]/[DONE]
@@ -77,6 +92,12 @@ research/
 ```
 
 ★ — глобальные, переживают `/clean`.
+
+## Тесты
+
+```bash
+pytest tests/ -v   # 35 тестов, ~1 секунда, без MLX
+```
 
 ## Что НЕ включено
 
