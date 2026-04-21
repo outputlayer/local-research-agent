@@ -319,7 +319,32 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                        ["read_plan", "read_notes", "read_synthesis", "read_draft",
                         "write_draft", "append_draft"],
                        max_tokens=6144)
-    writer_msgs = [{"role": "user", "content": f"Собери финальный отчёт по теме: {query}"}]
+    # Инжект KB — передаём writer'у свежий снимок атомов (репо + top papers) отдельным
+    # блоком, чтобы секции "## Репозитории" и "## Источники" формировались из KB, а не
+    # из уходящего в компрессию notes.md.
+    kb_all = kb_mod.load()
+    repos = sorted([a for a in kb_all if a.get("kind") == "repo"],
+                   key=lambda a: a.get("stars", 0), reverse=True)[:8]
+    papers = kb_mod.search(query, k=12, atoms=kb_all) or \
+        [a for a in kb_all if a.get("kind") == "paper"][:12]
+    kb_blocks: list[str] = []
+    if repos:
+        kb_blocks.append("Репозитории (для секции '## Репозитории'):")
+        for r in repos:
+            kb_blocks.append(
+                f"- [repo: {r.get('id','?')} ★{r.get('stars',0)} {r.get('lang','')}] "
+                f"{r.get('url','')} — {r.get('claim','')[:180]}")
+    else:
+        kb_blocks.append("Репозитории: в KB нет репо с ★≥10 (используй точную строку-заглушку из промпта).")
+    if papers:
+        kb_blocks.append("\nPapers (для таблиц '## Подходы' / '## Бенчмарки'):")
+        for p in papers:
+            kb_blocks.append(f"- [{p.get('id','?')}] {p.get('title','')[:90]} — {p.get('claim','')[:180]}")
+    kb_context = "\n".join(kb_blocks)
+    writer_msgs = [{"role": "user",
+                    "content": (f"Собери финальный отчёт по теме: {query}\n\n"
+                                f"KB context (authoritative список источников — "
+                                f"используй id и repo ИМЕННО отсюда):\n{kb_context}")}]
     t_wr = time.time()
     resp = _run_agent(writer, writer_msgs, "✍️ ")
     metrics.writer_seconds = time.time() - t_wr
@@ -340,9 +365,11 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         c_seconds = time.time() - t_cr
         critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
         issues = count_critic_issues(critique)
-        # APPROVED считается валидным только если критик не перечислил правки
-        # (issues == 0 отсекает длинные ответы вроде "APPROVED, но добавь X, Y").
-        approved = "APPROVED" in critique.upper() and issues == 0
+        # APPROVED: либо явное слово БЕЗ перечисленных правок, либо 0 структурных правок
+        # (закрывает кейс когда критик ответил 'замечаний нет' другими словами).
+        approved = issues == 0 and (
+            "APPROVED" in critique.upper() or len(critique) < 200
+        )
         converged = False
         print(f"   📋 правок у критика: {issues}")
         if approved:

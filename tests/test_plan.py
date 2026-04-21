@@ -16,11 +16,11 @@ def plan_env(tmp_path, monkeypatch):
 
 
 # ── reset / persistence ────────────────────────────────────────────────
-def test_reset_creates_three_seed_tasks_and_sets_focus(plan_env):
+def test_reset_creates_seed_tasks_and_sets_focus(plan_env):
     plan, tmp = plan_env
     p = plan.reset("some topic")
     assert p.root_goal == "some topic"
-    assert len(p.tasks) == 3
+    assert len(p.tasks) == 5
     assert all(t.status == "open" or t.status == "in_progress" for t in p.tasks)
     assert p.current_focus_id is not None
     assert p.focus_task().status == "in_progress"
@@ -45,7 +45,7 @@ def test_save_and_load_roundtrip(plan_env):
     reloaded = plan.load()
     assert reloaded is not None
     assert reloaded.root_goal == "x"
-    assert len(reloaded.tasks) == 4
+    assert len(reloaded.tasks) == 6
     # ревизии тоже сохраняются
     assert any(r.action == "add" for r in reloaded.revisions)
 

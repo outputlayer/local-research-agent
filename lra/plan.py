@@ -328,14 +328,23 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
 
 # ── Инициализация ─────────────────────────────────────────────────────────
 def reset(query: str, path: Path | None = None) -> Plan:
-    """Пересоздаёт plan.json под новый запрос. Три стартовых open-задачи + focus на первую."""
+    """Пересоздаёт plan.json под новый запрос. Пять стартовых open-задач + focus на первую.
+
+    Ветки подобраны так, чтобы покрывать и науку (papers/методы), и инженерию (репо/
+    бенчмарки) — это заставляет explorer делать github_search и собирать конкретные
+    метрики, а не только пересказывать абстракты.
+    """
     plan = Plan(root_goal=query)
-    t1 = plan.add_task(f"{query}: обзорные статьи и архитектуры",
-                       origin="initial", iter_=0, why="seed")
-    plan.add_task(f"{query}: ключевые методы и их ограничения",
-                  origin="initial", iter_=0, why="seed")
+    t1 = plan.add_task(f"{query}: обзорные статьи и ключевые архитектуры",
+                       origin="initial", iter_=0, why="seed: наука/методы")
+    plan.add_task(f"{query}: реализации и open-source репозитории (★≥10)",
+                  origin="initial", iter_=0, why="seed: инженерия/reuse")
+    plan.add_task(f"{query}: бенчмарки и численные метрики (SR, accuracy, E2E)",
+                  origin="initial", iter_=0, why="seed: evaluation")
+    plan.add_task(f"{query}: ограничения и failure modes",
+                  origin="initial", iter_=0, why="seed: critical view")
     plan.add_task(f"{query}: открытые вопросы и направления",
-                  origin="initial", iter_=0, why="seed")
+                  origin="initial", iter_=0, why="seed: gaps")
     plan.set_focus(t1.id, iter_=0, why="начальный фокус")
     save(plan, path=path)
     return plan
