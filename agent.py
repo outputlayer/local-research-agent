@@ -162,6 +162,10 @@ class HfPapers(BaseTool):
         p = _parse_args(params)
         query = p["query"]
         limit = max(1, min(int(p.get("limit", 5)), 10))
+        # Enforcement: точный дубликат запроса = отказ (экономим токены и заставляем переформулировать)
+        if _normalize_query(query) in _seen_queries():
+            return (f"ОТКАЗ: запрос '{query}' уже выполнялся в этой сессии. "
+                    "Переформулируй (другие ключевые слова, автор, год, техника) или читай read_notes.")
         _log_query(query)
         try:
             r = subprocess.run(
@@ -218,16 +222,31 @@ class RunPython(BaseTool):
 # ─── Research: explorer (rabbit-hole) → writer → critic ───────────────
 
 RESEARCH_DIR = Path(__file__).parent / "research"
+ARCHIVE_DIR = RESEARCH_DIR / "archive"
 DRAFT_PATH = RESEARCH_DIR / "draft.md"
 NOTES_PATH = RESEARCH_DIR / "notes.md"
 PLAN_PATH = RESEARCH_DIR / "plan.md"
 SYNTHESIS_PATH = RESEARCH_DIR / "synthesis.md"
+# Reflexion-память ГЛОБАЛЬНА — живёт между сессиями, не стирается при новом запросе
 LESSONS_PATH = RESEARCH_DIR / "lessons.md"
 QUERYLOG_PATH = RESEARCH_DIR / "querylog.md"
 
 
 def _ensure_dir():
     RESEARCH_DIR.mkdir(exist_ok=True)
+    ARCHIVE_DIR.mkdir(exist_ok=True)
+
+
+def _normalize_query(q: str) -> str:
+    return re.sub(r"\s+", " ", q.strip().lower())
+
+
+def _seen_queries() -> set[str]:
+    if not QUERYLOG_PATH.exists():
+        return set()
+    return {_normalize_query(ln.lstrip("- ").strip())
+            for ln in QUERYLOG_PATH.read_text().splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")}
 
 
 def _log_query(query: str):
@@ -516,38 +535,56 @@ COMPRESSOR_PROMPT = (
 )
 
 
-def _validate_draft_ids() -> tuple[int, list[str]]:
-    """Снимает arXiv-id из черновика и проверяет их через `hf papers info`.
+def _validate_draft_ids() -> tuple[int, list[str], list[str]]:
+    """Проверяет arXiv-id в черновике и качество их цитирования.
 
-    Возвращает: (кол-во валидных, список невалидных).
+    Возвращает: (валидных, несуществующих, подозрительных_цитат).
+    Подозрительная цитата: id из notes, но контекст вокруг него в draft'е не пересекается
+    с фактами из notes для этого id (≥3 общих ключевых слов).
     """
-    import re
     if not DRAFT_PATH.exists():
-        return 0, []
-    text = DRAFT_PATH.read_text()
-    # arXiv id: YYMM.NNNNN или YYMM.NNNN
-    ids = set(re.findall(r"\b(\d{4}\.\d{4,5})\b", text))
+        return 0, [], []
+    draft_text = DRAFT_PATH.read_text()
+    ids = set(re.findall(r"\b(\d{4}\.\d{4,5})\b", draft_text))
     if not ids:
-        return 0, []
+        return 0, [], []
     notes_text = NOTES_PATH.read_text() if NOTES_PATH.exists() else ""
     notes_ids = set(re.findall(r"\b(\d{4}\.\d{4,5})\b", notes_text))
-    invalid = []
+    invalid, suspicious = [], []
     valid = 0
+
+    def _keywords(s: str) -> set[str]:
+        return {w.lower() for w in re.findall(r"[A-Za-zА-Яа-я][A-Za-zА-Яа-я\-]{4,}", s)}
+
     for pid in ids:
-        if pid in notes_ids:
+        if pid not in notes_ids:
+            # id не в notes — сверяем через hf CLI
+            try:
+                r = subprocess.run(["hf", "papers", "info", pid],
+                                   capture_output=True, text=True, timeout=15)
+                if r.returncode != 0 or "not found" in (r.stdout + r.stderr).lower():
+                    invalid.append(pid); continue
+            except Exception:
+                invalid.append(pid); continue
             valid += 1
             continue
-        # id не в заметках — проверяем через hf CLI
-        try:
-            r = subprocess.run(["hf", "papers", "info", pid],
-                               capture_output=True, text=True, timeout=15)
-            if r.returncode != 0 or "not found" in (r.stdout + r.stderr).lower():
-                invalid.append(pid)
-            else:
-                valid += 1
-        except Exception:
-            invalid.append(pid)
-    return valid, invalid
+        # id есть в notes — проверяем семантическое совпадение цитаты
+        # Берём контекст в draft: 120 символов вокруг каждого вхождения id
+        draft_ctx = " ".join(re.findall(rf".{{0,120}}{re.escape(pid)}.{{0,120}}", draft_text, re.DOTALL))
+        # Контекст в notes: строки содержащие pid + соседние
+        notes_lines = notes_text.splitlines()
+        notes_ctx_parts = []
+        for i, ln in enumerate(notes_lines):
+            if pid in ln:
+                notes_ctx_parts.append(" ".join(notes_lines[max(0, i-1):i+3]))
+        notes_ctx = " ".join(notes_ctx_parts)
+        draft_kw = _keywords(draft_ctx) - {"paper", "paperов", "статья", "работа", "авторы", "model", "method"}
+        notes_kw = _keywords(notes_ctx)
+        overlap = draft_kw & notes_kw
+        if len(overlap) < 3:
+            suspicious.append(f"{pid} (overlap={len(overlap)})")
+        valid += 1
+    return valid, invalid, suspicious
 
 
 def _run_agent(bot: Assistant, messages: list, icon: str) -> list:
@@ -559,13 +596,45 @@ def _run_agent(bot: Assistant, messages: list, icon: str) -> list:
     return resp
 
 
+def _archive_previous(query_hint: str = ""):
+    """Сохраняет предыдущий draft+notes+plan+synthesis в archive/<timestamp>_<slug>/."""
+    if not DRAFT_PATH.exists() and not NOTES_PATH.exists():
+        return None
+    from datetime import datetime
+    slug = re.sub(r"[^a-zA-Z0-9а-яА-Я]+", "-", query_hint)[:40].strip("-") or "run"
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    dest = ARCHIVE_DIR / f"{stamp}_{slug}"
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH):
+        if p.exists():
+            (dest / p.name).write_text(p.read_text())
+    return dest
+
+
 def _reset_research(query: str):
+    """Готовит рабочую папку к новому запуску.
+    draft/notes/plan/synthesis — архивируются и очищаются.
+    lessons/querylog — СОХРАНЯЮТСЯ (кросс-сессионная Reflexion-память).
+    """
     _ensure_dir()
-    for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, LESSONS_PATH, QUERYLOG_PATH):
+    archived = _archive_previous(query)
+    if archived:
+        print(f"📦 Прошлый прогон сохранён: {archived.relative_to(RESEARCH_DIR.parent)}")
+    for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH):
         p.unlink(missing_ok=True)
     NOTES_PATH.write_text(f"# Notes: {query}\n")
-    LESSONS_PATH.write_text(f"# Lessons: {query}\n")
-    QUERYLOG_PATH.write_text(f"# Query log: {query}\n")
+    # lessons и querylog инициализируем только если их нет совсем
+    if not LESSONS_PATH.exists():
+        LESSONS_PATH.write_text("# Lessons (global, across sessions)\n")
+    if not QUERYLOG_PATH.exists():
+        QUERYLOG_PATH.write_text("# Query log (global, across sessions)\n")
+    # Маркер новой сессии в обоих файлах
+    from datetime import datetime
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    with LESSONS_PATH.open("a") as f:
+        f.write(f"\n## Session {stamp}: {query}\n")
+    with QUERYLOG_PATH.open("a") as f:
+        f.write(f"\n## Session {stamp}: {query}\n")
     # Начальный план с FOCUS = исходная тема. Replanner потом перепишет структуру.
     PLAN_PATH.write_text(
         f"# Plan: {query}\n\n"
@@ -590,7 +659,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
       Каждая итерация: explorer читает plan.md (FOCUS+Digest), идёт в [FOCUS],
       добавляет в notes.md. Затем replanner переписывает plan.md: обновляет Digest,
       корректирует вектор, выбирает новый [FOCUS].
-    Фаза 1.5 (compressor): сжимает notes если > 3500 симв.
+    Фаза 1.5 (compressor): сжимает notes если > 8000 симв.
     Фаза 2.0 (synthesizer): мосты, противоречия, пробелы, экстраполяции, testable.
     Фаза 2 (writer): финальный черновик из notes+synthesis.
     Фаза 3 (critic): критика + правки в цикле.
@@ -705,30 +774,46 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     resp = _run_agent(writer, writer_msgs, "✍️ ")
     writer_msgs.extend(resp)
 
-    # Фаза 3
+    # Фаза 3 — критик с проверкой конвергенции (если две критики подряд почти одинаковы — выходим)
     print(f"\n🔍 Фаза 3: критик ({critic_rounds} раунд(ов))")
     critic = _build_bot(CRITIC_PROMPT,
                         ["read_draft", "read_notes", "read_synthesis"],
                         max_tokens=2048)
+    prev_critique = ""
+
+    def _crit_keywords(s: str) -> set[str]:
+        return {w.lower() for w in re.findall(r"[\w\-]{5,}", s)}
+
     for i in range(1, critic_rounds + 1):
         print(f"\n── критика {i}/{critic_rounds} ──")
         c_resp = _run_agent(critic, [{"role": "user", "content": f"Оцени черновик по теме: {query}"}], "🔍")
         critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
         if "APPROVED" in critique.upper() and len(critique) < 60:
             print("✅ критик одобрил"); break
+        # Конвергенция: если новая критика пересекается с предыдущей на >70% ключевых слов — зациклились
+        if prev_critique:
+            a, b = _crit_keywords(prev_critique), _crit_keywords(critique)
+            if a and b:
+                sim = len(a & b) / max(1, len(a | b))
+                if sim > 0.70:
+                    print(f"✅ критик зациклился (сходство {sim:.0%}) — выходим"); break
+        prev_critique = critique
         writer_msgs.append({"role": "user",
                             "content": f"Критика:\n{critique}\n\nПерепиши через write_draft."})
         resp = _run_agent(writer, writer_msgs, "✍️ ")
         writer_msgs.extend(resp)
 
     if DRAFT_PATH.exists():
-        # Фаза 4 — валидация arXiv-id
-        print(f"\n🔐 Фаза 4: валидация цитат через `hf papers info`")
-        valid, invalid = _validate_draft_ids()
+        # Фаза 4 — валидация arXiv-id + семантическая сверка цитат с notes
+        print(f"\n🔐 Фаза 4: валидация цитат (hf info + keyword overlap с notes)")
+        valid, invalid, suspicious = _validate_draft_ids()
         print(f"   ✓ валидных: {valid}")
         if invalid:
             print(f"   ✗ не найдены: {invalid}")
             print("   ⚠️  возможные галлюцинации — проверь вручную")
+        if suspicious:
+            print(f"   ⚠️  слабое совпадение цитаты с notes: {suspicious}")
+            print("       (id существует, но текст вокруг него в draft'е не отражает факты из notes)")
         print(f"\n📄 Итог: {DRAFT_PATH}\n" + "─" * 60)
         print(DRAFT_PATH.read_text())
         print("─" * 60)
@@ -761,7 +846,8 @@ def main():
     _get_mlx(CFG["model"])
     print("✅ Готово. Команды:")
     print("   <тема>              — запустить ресёрч (alias: /research <тема>)")
-    print("   /clean              — очистить research/ (draft, notes, plan, synthesis)")
+    print("   /clean              — очистить рабочую папку (lessons/querylog остаются)")
+    print("   /forget             — стереть ВСЁ, включая глобальную Reflexion-память")
     print("   /exit               — выход\n")
 
     while True:
@@ -774,9 +860,15 @@ def main():
         if q == "/exit":
             return
         if q in ("/clean", "/clean-research"):
+            # стираем только текущую рабочую папку
+            for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH):
+                p.unlink(missing_ok=True)
+            print("🗑️  research/ очищена (lessons/querylog сохранены — глобальная память)\n"); continue
+        if q == "/forget":
+            # полный сброс, включая Reflexion-память
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, SYNTHESIS_PATH, LESSONS_PATH, QUERYLOG_PATH):
                 p.unlink(missing_ok=True)
-            print("🗑️  research/ очищена\n"); continue
+            print("🧠  Всё стёрто, включая глобальные lessons/querylog\n"); continue
 
         if q.startswith("/research"):
             q = q[len("/research"):].strip()
