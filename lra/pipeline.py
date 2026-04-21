@@ -24,7 +24,9 @@ from .prompts import (
     COMPRESSOR_PROMPT,
     CRITIC_PROMPT,
     EXPLORER_PROMPT,
+    FACT_CRITIC_PROMPT,
     REPLANNER_PROMPT,
+    STRUCTURE_CRITIC_PROMPT,
     SYNTHESIZER_PROMPT,
     WRITER_PROMPT,
 )
@@ -447,6 +449,114 @@ def _normalize_draft_file() -> bool:
     return False
 
 
+def _run_critic_round(critic: Assistant, critic_name: str, query: str,
+                      user_hint: str, i: int, total: int,
+                      prev_critique: str, metrics: RunMetrics) -> tuple[str, bool, bool]:
+    """Один раунд критики. Возвращает (critique_text, approved, converged).
+
+    Выделено, чтобы не дублировать логику между legacy-single-critic и specialized-critics.
+    """
+    print(f"\n── {critic_name} {i}/{total} ──")
+    t_cr = time.time()
+    c_resp = _run_agent(critic,
+                        [{"role": "user", "content": (
+                            f"Оцени черновик по теме: {query}\n\n{user_hint}\n\n"
+                            "После чтения — либо список до 5 правок по формату из system-prompt, "
+                            "либо ровно слово APPROVED на отдельной строке.")}],
+                        "🔍")
+    c_seconds = time.time() - t_cr
+    critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
+    issues = count_critic_issues(critique)
+    draft_ok = DRAFT_PATH.exists() and DRAFT_PATH.stat().st_size >= 200
+    tail = critique[-80:].upper().strip()
+    approved_keyword = tail.endswith("APPROVED") or tail == "APPROVED"
+    approved = draft_ok and issues == 0 and approved_keyword
+    converged = False
+    if prev_critique and not approved:
+        sim = jaccard(keyword_set(prev_critique), keyword_set(critique))
+        if sim > 0.70:
+            converged = True
+            print(f"   🔁 критик зациклился (сходство {sim:.0%})")
+    print(f"   📋 правок: {issues}  (draft_ok={draft_ok}, approved={approved})")
+    metrics.critic_rounds.append(CriticRound(
+        round=len(metrics.critic_rounds) + 1, issues_found=(0 if approved else issues),
+        approved=approved, converged_by_similarity=converged, seconds=c_seconds,
+    ))
+    return critique, approved, converged
+
+
+def _run_legacy_critic(query: str, writer: Assistant, writer_msgs: list,
+                       metrics: RunMetrics, critic_rounds: int) -> None:
+    """Один combined critic (CRITIC_PROMPT) с циклом rewrite."""
+    print(f"\n🔍 Фаза 3: критик ({critic_rounds} раунд(ов))")
+    critic = build_bot(CRITIC_PROMPT,
+                       ["read_draft", "read_notes", "read_synthesis"],
+                       max_tokens=2048)
+    hint = ("ОБЯЗАТЕЛЬНО сначала вызови read_draft, потом read_notes и read_synthesis — "
+            "у тебя ЕСТЬ эти инструменты. Не проси прислать текст.")
+    prev_critique = ""
+    for i in range(1, critic_rounds + 1):
+        critique, approved, converged = _run_critic_round(
+            critic, "критика", query, hint, i, critic_rounds, prev_critique, metrics)
+        if approved or converged:
+            break
+        prev_critique = critique
+        writer_msgs.append({"role": "user",
+                            "content": f"Критика:\n{critique}\n\nПерепиши через write_draft."})
+        writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
+        _normalize_draft_file()
+
+
+def _run_specialized_critics(query: str, writer: Assistant, writer_msgs: list,
+                             metrics: RunMetrics, critic_rounds: int) -> None:
+    """Fact-critic → writer rewrite цикл → structure-critic → writer rewrite цикл.
+
+    Это отражает insight из [2506.18096]: разделение verifier на фактологический и
+    структурный даёт более точные правки, чем один 'универсальный' critic.
+    """
+    print(f"\n🔍 Фаза 3: specialized critics (fact → structure, до {critic_rounds} раунд(ов) каждый)")
+    fact_critic = build_bot(FACT_CRITIC_PROMPT,
+                            ["read_draft", "read_notes", "read_synthesis"],
+                            max_tokens=2048)
+    struct_critic = build_bot(STRUCTURE_CRITIC_PROMPT,
+                              ["read_draft"],
+                              max_tokens=1536)
+
+    # Sub-phase A — fact-critic
+    fact_hint = ("ОБЯЗАТЕЛЬНО сначала вызови read_draft, потом read_notes и read_synthesis. "
+                 "Проверяй только фактологию: есть ли [id], упоминается ли id в notes, "
+                 "согласован ли факт рядом с id с notes. Структуру НЕ трогай.")
+    prev = ""
+    for i in range(1, critic_rounds + 1):
+        critique, approved, converged = _run_critic_round(
+            fact_critic, "fact-critic", query, fact_hint, i, critic_rounds, prev, metrics)
+        if approved or converged:
+            break
+        prev = critique
+        writer_msgs.append({"role": "user",
+                            "content": (f"FACT-КРИТИКА (только фактология):\n{critique}\n\n"
+                                        "Перепиши через write_draft + append_draft.")})
+        writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
+        _normalize_draft_file()
+
+    # Sub-phase B — structure-critic
+    struct_hint = ("ОБЯЗАТЕЛЬНО вызови read_draft. Проверяй ТОЛЬКО структуру и формат "
+                   "(7 секций, 6 тегов в '## Ключевые инсайты', плоские цитаты без backticks). "
+                   "Фактологию НЕ трогай.")
+    prev = ""
+    for i in range(1, critic_rounds + 1):
+        critique, approved, converged = _run_critic_round(
+            struct_critic, "structure-critic", query, struct_hint, i, critic_rounds, prev, metrics)
+        if approved or converged:
+            break
+        prev = critique
+        writer_msgs.append({"role": "user",
+                            "content": (f"STRUCTURE-КРИТИКА (только формат и структура):\n{critique}\n\n"
+                                        "Перепиши через write_draft + append_draft.")})
+        writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
+        _normalize_draft_file()
+
+
 def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None:
     """Фаза 2 (writer) + 3 (critic) + 4 (validator). Выделена для переиспользования
     в resume_research: позволяет дописать отчёт если phase 1 уже прошла но draft пустой.
@@ -492,55 +602,13 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
     if _normalize_draft_file():
         print("   🧹 нормализованы цитаты в draft.md")
 
-    # Фаза 3 — critic с конвергенцией
-    print(f"\n🔍 Фаза 3: критик ({critic_rounds} раунд(ов))")
-    critic = build_bot(CRITIC_PROMPT,
-                       ["read_draft", "read_notes", "read_synthesis"],
-                       max_tokens=2048)
-    prev_critique = ""
-    for i in range(1, critic_rounds + 1):
-        print(f"\n── критика {i}/{critic_rounds} ──")
-        t_cr = time.time()
-        c_resp = _run_agent(critic,
-                            [{"role": "user", "content": (
-                                f"Оцени черновик по теме: {query}\n\n"
-                                "ОБЯЗАТЕЛЬНО сначала вызови read_draft, потом read_notes и "
-                                "read_synthesis — у тебя ЕСТЬ эти инструменты. Не проси "
-                                "прислать текст, не отвечай 'нет доступа к файлам'. "
-                                "После чтения — либо список до 5 правок по формату из system-prompt, "
-                                "либо ровно слово APPROVED на отдельной строке.")}],
-                            "🔍")
-        c_seconds = time.time() - t_cr
-        critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
-        issues = count_critic_issues(critique)
-        draft_ok = DRAFT_PATH.exists() and DRAFT_PATH.stat().st_size >= 200
-        tail = critique[-80:].upper().strip()
-        approved_keyword = tail.endswith("APPROVED") or tail == "APPROVED"
-        approved = draft_ok and issues == 0 and approved_keyword
-        converged = False
-        print(f"   📋 правок у критика: {issues}  (draft_ok={draft_ok})")
-        if approved:
-            metrics.critic_rounds.append(CriticRound(round=i, issues_found=0, approved=True, seconds=c_seconds))
-            print("✅ критик одобрил")
-            break
-        if prev_critique:
-            sim = jaccard(keyword_set(prev_critique), keyword_set(critique))
-            if sim > 0.70:
-                converged = True
-                metrics.critic_rounds.append(CriticRound(
-                    round=i, issues_found=issues, approved=False,
-                    converged_by_similarity=True, seconds=c_seconds))
-                print(f"✅ критик зациклился (сходство {sim:.0%}) — выходим")
-                break
-        metrics.critic_rounds.append(CriticRound(
-            round=i, issues_found=issues, approved=False,
-            converged_by_similarity=converged, seconds=c_seconds))
-        prev_critique = critique
-        writer_msgs.append({"role": "user",
-                            "content": f"Критика:\n{critique}\n\nПерепиши через write_draft."})
-        resp = _run_agent(writer, writer_msgs, "✍️ ")
-        writer_msgs.extend(resp)
-        _normalize_draft_file()
+    # Фаза 3 — критика. Если CFG.specialized_critics=True (default) — два
+    # специализированных критика подряд (fact → structure), каждый со своим фокусом.
+    # Legacy-режим: один combined CRITIC_PROMPT.
+    if CFG.get("specialized_critics", True) and critic_rounds >= 1:
+        _run_specialized_critics(query, writer, writer_msgs, metrics, critic_rounds)
+    else:
+        _run_legacy_critic(query, writer, writer_msgs, metrics, critic_rounds)
 
     if DRAFT_PATH.exists():
         print("\n🔐 Фаза 4: валидация цитат (hf info + keyword overlap с notes)")

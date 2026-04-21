@@ -48,10 +48,10 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
             role = "replanner"
         elif "СИНТЕЗАТОР" in msg:
             role = "synthesizer"
+        elif "FACT-CRITIC" in msg or "STRUCTURE-CRITIC" in msg or "рецензент" in msg:
+            role = "critic"
         elif "writer" in msg.lower():
             role = "writer"
-        elif "рецензент" in msg:
-            role = "critic"
         elif "компрессор" in msg:
             role = "compressor"
         else:
@@ -143,8 +143,9 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
     assert len(data["iterations"]) >= 1
     assert data["iterations"][0]["new_arxiv_ids"] >= 1
     assert data["valid_ids"] == 2  # из нашего мока validate_draft_ids
-    assert len(data["critic_rounds"]) == 1
-    assert data["critic_rounds"][0]["approved"] is True
+    # specialized critics = 2 раунда (fact + structure), оба APPROVED
+    assert len(data["critic_rounds"]) == 2
+    assert all(r["approved"] for r in data["critic_rounds"])
 
 
 def test_research_loop_early_stop_on_plan_complete(tmp_path, monkeypatch):
