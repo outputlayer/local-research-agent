@@ -16,8 +16,9 @@ from . import cli as cli_run
 from . import kb as kb_mod
 from . import llm as _llm_register  # noqa: F401
 from . import plan as plan_mod
+from . import research_memory as research_memory_mod
 from . import tools  # noqa: F401
-from .config import CFG, DRAFT_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR, SYNTHESIS_PATH
+from .config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR, SYNTHESIS_PATH
 from .logger import get_logger
 from .memory import reset_research
 from .metrics import CriticRound, IterationMetric, RunMetrics, count_critic_issues
@@ -217,10 +218,15 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         # это даёт постоянный контекст поверх read_notes (который режется на 20k симв).
         kb_context = kb_mod.format_atoms(kb_mod.search(focus, k=3))
         kb_block = f"\n\nУже известно по схожим темам (KB top-3):\n{kb_context}\n" if kb_context else ""
+        memory_context = _build_memory_context(query, focus)
+        memory_block = (
+            f"\n\nРелевантная cross-session память:\n{memory_context}\n"
+            if memory_context else ""
+        )
         t_exp = time.time()
         msg = [{"role": "user",
                 "content": f"Исходная тема: {query}\n"
-                           f"Текущий [FOCUS] из plan.md: {focus}{kb_block}\n"
+                           f"Текущий [FOCUS] из plan.md: {focus}{kb_block}{memory_block}\n"
                            "Сделай одну итерацию по [FOCUS]. ОБЯЗАТЕЛЬНО append_notes и append_lessons. "
                            "Для КАЖДОЙ новой статьи/репозитория вызови kb_add — это нужно для поиска "
                            "по накопленному знанию на будущих итерациях."}]
@@ -376,9 +382,15 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     synthesizer = build_bot(SYNTHESIZER_PROMPT,
                             ["read_plan", "read_notes", "write_synthesis", "kb_search"],
                             max_tokens=4096)
+    synth_memory = _build_memory_context(query, "synthesis insights")
+    synth_memory_block = (
+        f"\n\nРелевантная cross-session память:\n{synth_memory}"
+        if synth_memory else ""
+    )
     t_syn = time.time()
     _run_agent(synthesizer,
-               [{"role": "user", "content": f"Произведи пять типов инсайтов по теме: {query}"}],
+               [{"role": "user",
+                 "content": f"Произведи пять типов инсайтов по теме: {query}{synth_memory_block}"}],
                "💡")
     metrics.synthesis_seconds = time.time() - t_syn
 
@@ -406,6 +418,26 @@ def _build_kb_context(query: str) -> str:
         for p in papers:
             blocks.append(f"- [{p.get('id','?')}] {p.get('title','')[:90]} — {p.get('claim','')[:180]}")
     return "\n".join(blocks)
+
+
+def _build_memory_context(*parts: str, k: int = 3) -> str:
+    """Top-k релевантных cross-session memories для текущего запроса/фокуса."""
+    query = " ".join(part.strip() for part in parts if part and part.strip())
+    if not query:
+        return ""
+    entries = research_memory_mod.select_relevant_memories(query, k=k)
+    return research_memory_mod.format_memory_context(entries)
+
+
+def _latest_lessons_tail(max_lines: int = 8, max_chars: int = 1200) -> str:
+    """Хвост lessons.md для записи в run-summary memory."""
+    if not LESSONS_PATH.exists():
+        return ""
+    lines = [ln.rstrip() for ln in LESSONS_PATH.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    tail = "\n".join(lines[-max_lines:])
+    return tail[-max_chars:]
 
 
 def _fallback_draft_from_kb(query: str) -> None:
@@ -681,10 +713,17 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
                         "write_draft", "append_draft"],
                        max_tokens=6144)
     kb_context = _build_kb_context(query)
+    memory_context = _build_memory_context(query, "final report")
+    memory_block = (
+        f"\n\nRelevant cross-session memory (используй только как вспомогательный контекст, "
+        f"не как замену notes/KB):\n{memory_context}"
+        if memory_context else ""
+    )
     writer_msgs = [{"role": "user",
                     "content": (f"Собери финальный отчёт по теме: {query}\n\n"
                                 f"KB context (authoritative список источников — "
-                                f"используй id и repo ИМЕННО отсюда):\n{kb_context}")}]
+                                f"используй id и repo ИМЕННО отсюда):\n{kb_context}"
+                                f"{memory_block}")}]
     t_wr = time.time()
     resp = _run_agent(writer, writer_msgs, "✍️ ")
     metrics.writer_seconds = time.time() - t_wr
@@ -745,6 +784,18 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
         print(f"Файлы: {NOTES_PATH.name}, {PLAN_PATH.name}, {DRAFT_PATH.name}")
     else:
         print("⚠️  writer не сохранил черновик")
+
+    try:
+        research_memory_mod.record_run_memory(
+            query=query,
+            stopped_reason=metrics.stopped_early_reason,
+            valid_ids=metrics.valid_ids,
+            invalid_ids=metrics.invalid_ids,
+            suspicious_citations=metrics.suspicious_citations,
+            lessons_tail=_latest_lessons_tail(),
+        )
+    except Exception as exc:
+        log.warning("не удалось записать run-summary memory (%s)", exc)
 
     # Всегда сохраняем метрики — даже если draft не создался
     metrics_path = metrics.finish()

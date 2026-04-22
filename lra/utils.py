@@ -6,6 +6,8 @@ import re
 
 import json5
 
+_CONTENT_ALIASES = ("content", "text", "markdown", "md", "body", "data", "value")
+
 
 def parse_args(params) -> dict:
     """Толерантный парсер tool-аргументов: чинит литеральные переносы строк и
@@ -114,17 +116,70 @@ def get_content(params) -> str:
     чтобы KeyError не ронял всю цепочку когда LLM прислал `{"text": ...}`,
     `{"markdown": ...}` или просто один ключ не того имени.
     """
+
+    def _unwrap(value):
+        current = value
+        for _ in range(4):
+            if isinstance(current, dict):
+                for key in _CONTENT_ALIASES:
+                    if key in current:
+                        current = current[key]
+                        break
+                else:
+                    first_str = next((v for v in current.values() if isinstance(v, str)), None)
+                    if first_str is None:
+                        return current
+                    current = first_str
+                continue
+
+            if not isinstance(current, str):
+                return current
+
+            s = current.strip()
+            if not s:
+                return ""
+
+            if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
+                try:
+                    inner = json.loads(s)
+                    if inner != current:
+                        current = inner
+                        continue
+                except Exception:
+                    pass
+
+            looks_like_content_blob = (
+                s.startswith("{")
+                and any(f'"{key}"' in s for key in _CONTENT_ALIASES)
+            )
+            if looks_like_content_blob:
+                try:
+                    inner = json5.loads(s)
+                except Exception:
+                    try:
+                        inner = json.loads(s)
+                    except Exception:
+                        break
+                if isinstance(inner, dict):
+                    current = inner
+                    continue
+            break
+        return current
+
     d = parse_args(params)
     if "content" in d:
-        return d["content"] or ""
+        content = _unwrap(d["content"])
+        return content if isinstance(content, str) else (json.dumps(content, ensure_ascii=False) if content is not None else "")
     # Common aliases LLM изобретает
-    for alt in ("text", "markdown", "md", "body", "data", "value"):
+    for alt in _CONTENT_ALIASES[1:]:
         if alt in d:
-            return d[alt] or ""
+            content = _unwrap(d[alt])
+            return content if isinstance(content, str) else (json.dumps(content, ensure_ascii=False) if content is not None else "")
     # Иначе берём первое строковое значение — лучше странный draft чем крэш.
     for v in d.values():
         if isinstance(v, str):
-            return v
+            content = _unwrap(v)
+            return content if isinstance(content, str) else (json.dumps(content, ensure_ascii=False) if content is not None else "")
     return ""
 
 

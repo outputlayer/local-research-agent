@@ -9,7 +9,7 @@ import pytest
 
 def _patch_paths(monkeypatch, tmp_path):
     """Перенаправляет ВСЕ path-ссылки (config/memory/tools/pipeline/validator/metrics/kb/plan) в tmp_path."""
-    from lra import config, kb, memory, metrics, pipeline, plan, tools, validator
+    from lra import config, kb, memory, metrics, pipeline, plan, research_memory, tools, validator
     paths = {
         "RESEARCH_DIR": tmp_path,
         "ARCHIVE_DIR": tmp_path / "archive",
@@ -23,8 +23,9 @@ def _patch_paths(monkeypatch, tmp_path):
         "REJECTED_PATH": tmp_path / "rejected.jsonl",
         "METRICS_PATH": tmp_path / "metrics.json",
         "KB_PATH": tmp_path / "kb.jsonl",
+        "RESEARCH_MEMORY_DIR": tmp_path / "memory",
     }
-    for mod in (config, memory, tools, pipeline, validator, metrics, kb, plan):
+    for mod in (config, memory, tools, pipeline, validator, metrics, kb, plan, research_memory):
         for name, path in paths.items():
             if hasattr(mod, name):
                 monkeypatch.setattr(mod, name, path)
@@ -148,6 +149,9 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
     # specialized critics = 2 раунда (fact + structure), оба APPROVED
     assert len(data["critic_rounds"]) == 2
     assert all(r["approved"] for r in data["critic_rounds"])
+
+    memory_files = list((tmp_path / "memory").glob("*.md"))
+    assert memory_files, "pipeline должен сохранять run-summary в research/memory/"
 
 
 def test_research_loop_early_stop_on_plan_complete(tmp_path, monkeypatch):

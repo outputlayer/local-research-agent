@@ -20,7 +20,7 @@ def _isolate_research_dir(tmp_path, monkeypatch):
 
     Также сбрасывает loop-tracker между тестами (ин-мемори state).
     """
-    from lra import config, kb, memory, metrics, pipeline, tools, validator
+    from lra import config, kb, memory, metrics, pipeline, research_memory, tools, validator
     from lra import plan as plan_mod
 
     research = tmp_path / "research"
@@ -40,8 +40,9 @@ def _isolate_research_dir(tmp_path, monkeypatch):
         "REJECTED_PATH": research / "rejected.jsonl",
         "SYNTHESIS_PATH": research / "synthesis.md",
         "KB_PATH": research / "kb.jsonl",
+        "RESEARCH_MEMORY_DIR": research / "memory",
     }
-    for mod in (config, kb, memory, metrics, pipeline, tools, validator, plan_mod):
+    for mod in (config, kb, memory, metrics, pipeline, research_memory, tools, validator, plan_mod):
         for attr, new in paths.items():
             if hasattr(mod, attr):
                 monkeypatch.setattr(mod, attr, new, raising=False)

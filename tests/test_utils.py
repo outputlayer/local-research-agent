@@ -1,5 +1,5 @@
 """Юниты для чистых утилит — без MLX, без сети."""
-from lra.utils import extract_ids, jaccard, keyword_set, normalize_query, parse_args
+from lra.utils import extract_ids, get_content, jaccard, keyword_set, normalize_query, parse_args
 
 
 class TestParseArgs:
@@ -70,6 +70,16 @@ class TestNormalizeQuery:
 
     def test_multi_whitespace_collapsed(self):
         assert normalize_query("a\t\n  b") == "a b"
+
+
+class TestGetContent:
+    def test_unwraps_nested_content_blob(self):
+        raw = r'{"content": "{\"content\": \"# Clean markdown\"}"}'
+        assert get_content(raw) == "# Clean markdown"
+
+    def test_preserves_plain_braces_text(self):
+        raw = {"content": "{not a json blob}"}
+        assert get_content(raw) == "{not a json blob}"
 
 
 class TestCountArxivIds:

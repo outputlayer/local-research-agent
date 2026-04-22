@@ -81,6 +81,7 @@ NOTES_PATH = RESEARCH_DIR / "notes.md"
 PLAN_PATH = RESEARCH_DIR / "plan.md"
 SYNTHESIS_PATH = RESEARCH_DIR / "synthesis.md"
 RUN_LOG_PATH = RESEARCH_DIR / "run.log"
+RESEARCH_MEMORY_DIR = RESEARCH_DIR / "memory"
 # Reflexion-память ГЛОБАЛЬНА — живёт между сессиями, не стирается при новом запросе
 LESSONS_PATH = RESEARCH_DIR / "lessons.md"
 QUERYLOG_PATH = RESEARCH_DIR / "querylog.md"
