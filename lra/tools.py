@@ -26,7 +26,7 @@ from .logger import get_logger
 from .memory import ensure_dir, is_similar_to_seen, log_query, seen_queries
 from .utils import (
     extract_ids,
-    extract_topic_keywords,
+    extract_topic_keywords_tiered,
     get_content,
     keyword_set,
     normalize_query,
@@ -50,24 +50,27 @@ def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
     return ids & known_in_kb, ids - known_in_kb
 
 
-def domain_gate(content: str, min_hits: int = 2) -> tuple[bool, set[str], set[str]]:
-    """Проверяет что content относится к домену запроса (из plan.md).
+def domain_gate(content: str) -> tuple[bool, str, set[str], set[str]]:
+    """Two-tier domain gate для AppendNotes и hf_papers kb auto-save.
 
-    Возвращает (passed, topic_kws, overlap). Pass = |overlap(content_kws, topic_kws)| ≥ min_hits.
-    Если plan.md отсутствует или пуст — pass=True (тема ещё не задана, ничего не фильтруем).
+    Правило: paper проходит ⇔ ≥2 совпадений с HEADER plan.md.
+    HEADER = первая строка ('# Plan: ...') — это исходный topic пользователя
+    и наиболее стабильный носитель core-терминов. Seeds из [Tn]-задач дрейфуют
+    и содержат мусор ('support' в 'electronic support measures' даёт false
+    positive на emotional-support-conversations paper) — используются только
+    для диагностики причины отказа в rejected.jsonl, но не для прохода.
 
-    Применяется только к записям с arxiv-id — reflection/meta-заметки без id не фильтруются.
+    Slow-start bypass: если в header <2 кандидатов — plan ещё generic, gate слеп.
+
+    Returns (passed, reason, overlap_header, overlap_seeds). reason ∈
+    {"no_plan", "slow_start", "no_core_hit", "weak_overlap", "passed"}.
     """
     if not PLAN_PATH.exists():
-        return True, set(), set()
-    topic_kws = extract_topic_keywords(PLAN_PATH.read_text(encoding="utf-8"))
-    # Slow-start guard: если в plan.md меньше 3 специфичных доменных слов, тема
-    # ещё не кристаллизовалась (generic seeds) — gate блокировал бы всё подряд.
-    # Пропускаем: notes_strict + validator финально поймают citation laundering.
-    if len(topic_kws) < 3:
-        return True, topic_kws, set()
-    # Берём kb-abstract под каждый id ИЗ content — он полнее, чем то, что explorer
-    # пишет в append. Если abstract не найден, fallback на content как есть.
+        return True, "no_plan", set(), set()
+    header_kws, seed_kws = extract_topic_keywords_tiered(PLAN_PATH.read_text(encoding="utf-8"))
+    if len(header_kws) < 2:
+        return True, "slow_start", header_kws, set()
+    # Собираем материал из kb для id, упомянутых в content.
     ids_in_content = extract_ids(content)
     abstracts: list[str] = [content]
     if ids_in_content:
@@ -77,19 +80,50 @@ def domain_gate(content: str, min_hits: int = 2) -> tuple[bool, set[str], set[st
             if atom:
                 abstracts.append(f"{atom.get('title', '')} {atom.get('claim', '')}")
     content_kws = keyword_set(" ".join(abstracts))
-    overlap = content_kws & topic_kws
-    return len(overlap) >= min_hits, topic_kws, overlap
+    o_header = content_kws & header_kws
+    o_seeds = content_kws & seed_kws
+    if not o_header:
+        return False, "no_core_hit", set(), o_seeds
+    if len(o_header) < 2:
+        return False, "weak_overlap", o_header, o_seeds
+    return True, "passed", o_header, o_seeds
 
 
-def _log_rejected(content: str, ids: set[str], topic_kws: set[str], overlap: set[str]) -> None:
-    """Пишет отклонённую заметку в research/rejected.jsonl для последующего анализа."""
+def gate_paper_for_kb(paper_id: str, title: str, abstract: str) -> tuple[bool, str]:
+    """Облегчённый gate для hf_papers/kb_add ДО записи в kb.jsonl.
+
+    Иначе explorer наполняет KB off-topic paper'ами (ComVo с auto-save остаётся
+    в KB даже если AppendNotes его режет, т.к. KB-запись идёт РАНЬШЕ в hf_papers).
+    Работает на сыром abstract (kb ещё не знает этот id).
+    """
+    if not CFG.get("strict_domain_gate", True) or not PLAN_PATH.exists():
+        return True, "bypass"
+    header_kws, _ = extract_topic_keywords_tiered(PLAN_PATH.read_text(encoding="utf-8"))
+    if len(header_kws) < 2:
+        return True, "slow_start"
+    kws = keyword_set(f"{title} {abstract}")
+    o_h = kws & header_kws
+    if not o_h:
+        return False, "no_core_hit"
+    if len(o_h) < 2:
+        return False, "weak_overlap"
+    return True, "passed"
+
+
+def _log_rejected(content: str, ids: set[str], reason: str,
+                  header_kws: set[str], seed_kws: set[str],
+                  o_header: set[str], o_seeds: set[str]) -> None:
+    """Пишет отклонённую заметку в research/rejected.jsonl для анализа."""
     from datetime import datetime
     ensure_dir()
     entry = {
         "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        "reason": reason,
         "ids": sorted(ids),
-        "overlap": sorted(overlap),
-        "topic_keywords_sample": sorted(topic_kws)[:20],
+        "overlap_header": sorted(o_header),
+        "overlap_seeds": sorted(o_seeds),
+        "header_keywords": sorted(header_kws)[:15],
+        "seed_keywords_sample": sorted(seed_kws)[:15],
         "content_preview": content[:300],
     }
     with REJECTED_PATH.open("a", encoding="utf-8") as f:
@@ -150,6 +184,7 @@ class HfPapers(BaseTool):
                           f"(cutoff={cutoff}) — показаны как fallback")
         lines = []
         auto_saved = 0
+        auto_filtered = 0
         for paper in data:
             authors = ", ".join(a["name"] for a in paper.get("authors", [])[:4])
             if len(paper.get("authors", [])) > 4:
@@ -161,7 +196,15 @@ class HfPapers(BaseTool):
             lines.append(f"[{pid}] {title}\n  {authors} · {date}\n  https://hf.co/papers/{pid}\n  {summary}")
             # Автосейв скелетного атома в KB — модель всё равно забывает kb_add вручную.
             # claim=summary (первые 400 симв) даст BM25-поиску на что опереться на следующих итерациях.
+            # Domain gate до auto-save: off-topic paper'ы не должны осесть в kb.jsonl
+            # даже если explorer их больше не упомянет. Это закрывает дыру, через
+            # которую ComVo попадал в KB, несмотря на AppendNotes gate.
             if pid:
+                passed, reason = gate_paper_for_kb(pid, title, summary)
+                if not passed:
+                    auto_filtered += 1
+                    log.debug("kb auto-save skipped %s (%s)", pid, reason)
+                    continue
                 try:
                     kb_mod.add(kb_mod.Atom(
                         id=pid, kind="paper", topic=query,
@@ -172,7 +215,12 @@ class HfPapers(BaseTool):
                     auto_saved += 1
                 except Exception as e:
                     log.debug("kb auto-save paper failed %s: %s", pid, e)
-        footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
+        footer_parts = []
+        if auto_saved:
+            footer_parts.append(f"📥 авто-сохранено в kb: {auto_saved}")
+        if auto_filtered:
+            footer_parts.append(f"🚫 отфильтровано domain gate: {auto_filtered}")
+        footer = f"\n\n({', '.join(footer_parts)})" if footer_parts else ""
         return "\n\n".join(lines) + footer + stale_note
 
 
@@ -250,13 +298,20 @@ class AppendNotes(BaseTool):
         # Ловит ComVo-style citation laundering ДО попадания в notes.md.
         ids = extract_ids(content)
         if CFG.get("strict_domain_gate", True) and ids:
-            passed, topic_kws, overlap = domain_gate(content)
-            if not passed and topic_kws:
-                _log_rejected(content, ids, topic_kws, overlap)
-                return (f"ОТКАЗ (domain gate): заметка с id {sorted(ids)} не относится к теме "
-                        f"плана. Пересечение с topic keywords: {sorted(overlap) or '∅'} "
-                        f"(нужно ≥2). Это paper из смежного домена — не лей в KB, возьми "
-                        "следующий результат поиска. Записано в rejected.jsonl.")
+            passed, reason, o_h, o_s = domain_gate(content)
+            if not passed:
+                from .utils import extract_topic_keywords_tiered as _kw
+                h_kws, s_kws = _kw(PLAN_PATH.read_text(encoding="utf-8"))
+                _log_rejected(content, ids, reason, h_kws, s_kws, o_h, o_s)
+                hint = {
+                    "no_core_hit": "ни одного core-термина из заголовка темы",
+                    "weak_overlap": f"только 1 совпадение (нужно ≥2, из них ≥1 core). "
+                                    f"Header hits: {sorted(o_h) or '∅'}, "
+                                    f"seeds hits: {sorted(o_s) or '∅'}",
+                }.get(reason, reason)
+                return (f"ОТКАЗ (domain gate, {reason}): заметка с id {sorted(ids)} "
+                        f"не относится к теме плана — {hint}. Это paper из смежного "
+                        "домена, не лей в KB/notes. Записано в rejected.jsonl.")
         with NOTES_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
         return f"notes.md +{len(content)} симв (всего {NOTES_PATH.stat().st_size} симв)"

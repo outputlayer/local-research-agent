@@ -16,6 +16,10 @@ def _patch(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "RESEARCH_DIR", tmp_path)
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / ".cache")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / ".cache")
+    # Gate в hf_papers читает PLAN_PATH → нужно изолировать от реального
+    # research/plan.md (он может содержать EW-тему и рубить тестовые fake papers).
+    monkeypatch.setattr(config, "PLAN_PATH", tmp_path / "plan.md")
+    monkeypatch.setattr(tools, "PLAN_PATH", tmp_path / "plan.md")
     return kb
 
 

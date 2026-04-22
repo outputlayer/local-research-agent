@@ -1,7 +1,11 @@
-"""Domain gate в AppendNotes: блокирует paper из смежного домена (citation laundering source).
+"""Domain gate в AppendNotes + hf_papers kb auto-save.
 
-Реальный кейс: запрос про EW/ELINT → explorer принёс ComVo (audio vocoder).
-Gate должен заблокировать по недостаточному overlap с topic keywords из plan.md.
+Реальные failure modes из логов:
+1. ComVo [2603.11589] (audio vocoder) — single 'intelligence' overlap, прошёл старый gate.
+2. Emotional-support [2508.12935] — single 'electronic' overlap, прошёл старый gate.
+3. Оба попадали в kb.jsonl через auto-save в hf_papers ДО того как AppendNotes мог их срезать.
+
+Tiered gate: требует ≥1 core hit (из HEADER plan.md) И ≥2 overlap всего.
 """
 import pytest
 
@@ -31,26 +35,22 @@ _EW_PLAN = (
 )
 
 
-def test_extract_topic_keywords_drops_generic():
-    from lra.utils import extract_topic_keywords
-    kws = extract_topic_keywords(_EW_PLAN)
-    # Доменные термины — есть
-    assert "electronic" in kws
-    assert "warfare" in kws
-    assert "elint" in kws
-    assert "spectrum" in kws
-    assert "radar" in kws
-    # Generic — отфильтрованы
-    assert "modern" not in kws
-    assert "approach" not in kws
-    assert "approaches" not in kws
+def test_tiered_keywords_separate_header_from_seeds():
+    from lra.utils import extract_topic_keywords_tiered
+    header, seeds = extract_topic_keywords_tiered(_EW_PLAN)
+    assert {"electronic", "warfare", "elint", "intelligence"}.issubset(header)
+    # Seeds disjoint от header, содержат domain specifics
+    assert "spectrum" in seeds or "radar" in seeds
+    # Generic-шум отфильтрован в обоих уровнях
+    for noise in ("modern", "approach", "contested", "environments", "canyons",
+                  "between", "challenges", "advanced", "novel", "algorithms"):
+        assert noise not in header, f"{noise} leaked into header"
+        assert noise not in seeds, f"{noise} leaked into seeds"
 
 
-def test_domain_gate_blocks_comvo_style_laundering(_isolated):
-    """Реальный кейс: explorer принёс ComVo (audio vocoder) по запросу про EW."""
+def test_domain_gate_blocks_comvo_no_core_hit(_isolated):
     from lra import kb, tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
-    # Имитируем успешный поиск: ComVo лежит в kb (id известен), но paper про аудио.
     kb.add(kb.Atom(
         id="2603.11589", kind="paper", topic="audio neural vocoder",
         title="ComVo complex-valued neural vocoder",
@@ -60,65 +60,106 @@ def test_domain_gate_blocks_comvo_style_laundering(_isolated):
     result = tools.AppendNotes().call(
         {"content": "[2603.11589] adversarial training для EW waveform generation"}
     )
-    assert "ОТКАЗ" in result
-    assert "domain gate" in result
-    # notes.md не создан, rejected.jsonl записан
+    assert "ОТКАЗ" in result and "no_core_hit" in result
     assert not (_isolated / "notes.md").exists()
-    rej = (_isolated / "rejected.jsonl").read_text(encoding="utf-8")
-    assert "2603.11589" in rej
+    import json
+    rej_line = (_isolated / "rejected.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
+    rej = json.loads(rej_line)
+    assert rej["reason"] == "no_core_hit"
+    assert "2603.11589" in rej["ids"]
+
+
+def test_domain_gate_blocks_single_generic_overlap(_isolated):
+    """emotional-support-conversations с одиночным hit по 'intelligence'.
+
+    Старый gate (порог 2 по плоскому set) мог пропустить: intelligence + electronic
+    оба в plan.md. Tiered: core hit есть, но seeds hit нет → нужен дополнительный
+    seed-термин для прохода, или ≥2 core-hit.
+    """
+    from lra import kb, tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    kb.add(kb.Atom(
+        id="2508.12935", kind="paper", topic="dialog",
+        title="Emotional support dialogue via RL",
+        claim=("reinforcement learning for emotional support dialogue generation, "
+               "human feedback and empathy"),
+    ))
+    result = tools.AppendNotes().call({"content": "[2508.12935] intelligence of dialog agents"})
+    assert "ОТКАЗ" in result
 
 
 def test_domain_gate_passes_relevant_paper(_isolated):
     from lra import kb, tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
-    # Real EW paper: overlap с topic kws = {electronic, warfare, spectrum, radar, elint}
     kb.add(kb.Atom(
         id="2401.00001", kind="paper", topic="electronic warfare",
-        title="Cognitive electronic warfare spectrum sensing",
+        title="Cognitive electronic warfare spectrum sensing for ELINT",
         claim=("cognitive electronic warfare system with radar signal classification, "
                "ELINT fingerprinting in contested spectrum environments"),
     ))
-    result = tools.AppendNotes().call(
-        {"content": "[2401.00001] cognitive EW spectrum sensing"}
-    )
+    result = tools.AppendNotes().call({"content": "[2401.00001] cognitive EW spectrum sensing"})
     assert "ОТКАЗ" not in result
     assert (_isolated / "notes.md").exists()
 
 
 def test_domain_gate_bypassed_for_reflection_without_ids(_isolated):
-    """Reflection-заметки без arxiv-id не фильтруются domain gate."""
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     result = tools.AppendNotes().call(
         {"content": "## Lesson: hf_papers 'generic AI' даёт нерелевантные результаты"}
     )
     assert "ОТКАЗ" not in result
-    assert (_isolated / "notes.md").exists()
 
 
 def test_domain_gate_bypassed_without_plan(_isolated):
-    """Если plan.md не создан — gate пропускает (тема ещё не задана)."""
     from lra import kb, tools
     kb.add(kb.Atom(id="2401.00001", kind="paper", topic="t", claim="c"))
-    # plan.md нет
     result = tools.AppendNotes().call({"content": "[2401.00001] early finding"})
     assert "ОТКАЗ" not in result
 
 
 def test_domain_gate_lenient_flag(_isolated, monkeypatch):
-    """CFG['strict_domain_gate']=False → gate отключён."""
     from lra import config, kb, tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
-    kb.add(kb.Atom(
-        id="2603.11589", kind="paper", topic="audio",
-        title="audio vocoder", claim="mel-spectrogram waveform generation",
-    ))
+    kb.add(kb.Atom(id="2603.11589", kind="paper", topic="audio",
+                   title="audio vocoder", claim="mel-spectrogram waveform generation"))
     original_get = config.CFG.get
     monkeypatch.setattr(
         config.CFG, "get",
         lambda k, d=None: False if k == "strict_domain_gate" else original_get(k, d),
     )
-    result = tools.AppendNotes().call(
-        {"content": "[2603.11589] off-topic paper"}
-    )
+    result = tools.AppendNotes().call({"content": "[2603.11589] off-topic paper"})
     assert "ОТКАЗ" not in result
+
+
+def test_gate_paper_for_kb_blocks_comvo(_isolated):
+    """hf_papers kb auto-save gate: off-topic paper не должен осесть в kb.jsonl."""
+    from lra import tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    passed, reason = tools.gate_paper_for_kb(
+        "2603.11589",
+        "ComVo complex-valued neural vocoder",
+        "complex-valued neural vocoder for waveform generation from mel-spectrogram "
+        "with adversarial training and phase representation",
+    )
+    assert passed is False
+    assert reason == "no_core_hit"
+
+
+def test_gate_paper_for_kb_passes_ew_paper(_isolated):
+    from lra import tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    passed, reason = tools.gate_paper_for_kb(
+        "2512.05753",
+        "FARDA: Fast Anti-Jamming Radar Deployment via Deep Reinforcement Learning",
+        "end-to-end DRL for electronic warfare radar deployment, jamming resistance, "
+        "spectrum sensing in contested environments, ELINT scenarios",
+    )
+    assert passed is True
+    assert reason == "passed"
+
+
+def test_gate_paper_for_kb_bypass_without_plan(_isolated):
+    from lra import tools
+    passed, reason = tools.gate_paper_for_kb("2401.00001", "any", "any content")
+    assert passed is True

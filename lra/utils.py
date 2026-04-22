@@ -157,29 +157,56 @@ _TOPIC_GENERIC = frozenset({
     "plan", "focus", "todo", "done", "blocked", "progress", "digest",
     "iter", "attempts", "evidence", "revision", "revisions",
     "deep-dive", "trade-offs", "tradeoffs",
+    # generic-соединители (ловились на "electronic" в 2508.12935 emotional support)
+    "advanced", "novel", "complex", "between", "among", "within",
+    "challenges", "challenge", "problem", "problems", "issue", "issues",
+    "future", "recent", "current", "emerging", "integration", "integrations",
+    # локальный шум из seeds типа "ELINT fingerprinting in urban canyons"
+    "canyons", "canyon", "contested", "environments", "environment",
+    "algorithm", "algorithms", "architecture", "architectures",
     "современ", "современные", "подход", "подходы", "обзор", "анализ",
     "метод", "методы", "система", "системы", "модель", "модели",
     "статья", "работа", "работы", "исследование", "исследования",
 })
 
 
-def extract_topic_keywords(plan_text: str) -> set[str]:
-    """Ключевые доменные термины из plan.md (заголовок + [Tn]-задачи).
+def _plan_sections(plan_text: str) -> tuple[str, str]:
+    """Разбивает plan.md на (header, seeds).
 
-    Используется domain-gate в AppendNotes: если abstract добавляемого paper не
-    пересекается с ЭТИМИ словами хотя бы на min_hits — paper из смежного домена,
-    в KB не льём. Семантика: 'из чего состоит наша тема' в терминах пользователя.
-
-    Нормализация: keyword_set (≥5 chars) минус STOPWORDS и _TOPIC_GENERIC.
+    header = первая строка (# Plan: ...), это и есть актуальный topic.
+    seeds  = все строки с [Tn] — часто drift'ят и содержат specific jargon,
+             но сами по себе слабый якорь (см. canyons / challenges).
     """
     if not plan_text:
-        return set()
-    # Первая строка (заголовок) + все строки с [Tn] — носители доменных терминов.
-    lines = [plan_text.split("\n", 1)[0]] + [
-        ln for ln in plan_text.splitlines() if re.search(r"\[T\d+\]", ln)
-    ]
-    kws = keyword_set(" ".join(lines))
+        return "", ""
+    lines = plan_text.splitlines()
+    header = lines[0] if lines else ""
+    seeds = "\n".join(ln for ln in lines if re.search(r"\[T\d+\]", ln))
+    return header, seeds
+
+
+def extract_topic_keywords(plan_text: str) -> set[str]:
+    """Все доменные ключевые слова из plan.md (header ∪ seeds). Backwards-compat."""
+    header, seeds = _plan_sections(plan_text)
+    kws = keyword_set(header + " " + seeds)
     return {w for w in kws if w not in STOPWORDS and w not in _TOPIC_GENERIC}
+
+
+def extract_topic_keywords_tiered(plan_text: str) -> tuple[set[str], set[str]]:
+    """Двухуровневое разделение для domain gate: (header_kws, seed_kws).
+
+    header_kws — ядро домена из заголовка (# Plan: ...). Это то, что изначально
+    спросил пользователь. ComVo (audio vocoder) не имеет ни одного overlap с
+    {electronic, warfare, elint, intelligence} — gate его режет.
+    seed_kws — специфика из [Tn] задач. Слабый якорь (drift), используется
+    только как bonus для paper'ов, которые УЖЕ прошли по header.
+    """
+    header, seeds = _plan_sections(plan_text)
+    h = {w for w in keyword_set(header)
+         if w not in STOPWORDS and w not in _TOPIC_GENERIC}
+    s = {w for w in keyword_set(seeds)
+         if w not in STOPWORDS and w not in _TOPIC_GENERIC}
+    return h, s - h  # seeds disjoint от header, чтобы не двойной учёт
 
 
 def jaccard(a: set, b: set) -> float:
