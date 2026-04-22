@@ -1,6 +1,7 @@
 """Оркестратор пайплайна: explorer ↔ replanner → synthesizer → writer ↔ critic → validator."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 import time
@@ -18,7 +19,16 @@ from . import llm as _llm_register  # noqa: F401
 from . import plan as plan_mod
 from . import research_memory as research_memory_mod
 from . import tools  # noqa: F401
-from .config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR, SYNTHESIS_PATH
+from .config import (
+    CFG,
+    DRAFT_PATH,
+    LESSONS_PATH,
+    NOTES_PATH,
+    PLAN_PATH,
+    REJECTED_PATH,
+    RESEARCH_DIR,
+    SYNTHESIS_PATH,
+)
 from .logger import get_logger
 from .memory import reset_research
 from .metrics import (
@@ -192,7 +202,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
 
     explorer = build_bot(EXPLORER_PROMPT,
                          ["hf_papers", "arxiv_search", "github_search",
-                          "read_plan", "read_notes", "append_notes",
+                          "read_plan", "read_notes", "read_notes_focused", "append_notes",
                           "read_lessons", "append_lessons", "read_querylog",
                           "kb_add", "kb_search",
                           "plan_add_task", "plan_close_task", "plan_split_task"],
@@ -229,10 +239,11 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
             f"\n\nРелевантная cross-session память:\n{memory_context}\n"
             if memory_context else ""
         )
+        status_block = "\n\n" + _build_status_context(query, focus)
         t_exp = time.time()
         msg = [{"role": "user",
                 "content": f"Исходная тема: {query}\n"
-                           f"Текущий [FOCUS] из plan.md: {focus}{kb_block}{memory_block}\n"
+                           f"Текущий [FOCUS] из plan.md: {focus}{kb_block}{memory_block}{status_block}\n"
                            "Сделай одну итерацию по [FOCUS]. ОБЯЗАТЕЛЬНО append_notes и append_lessons. "
                            "Для КАЖДОЙ новой статьи/репозитория вызови kb_add — это нужно для поиска "
                            "по накопленному знанию на будущих итерациях."}]
@@ -386,17 +397,18 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     # Фаза 2.0 — синтез
     print("\n💡 Фаза 2.0: синтезатор (мосты/противоречия/пробелы/экстраполяция/testable)")
     synthesizer = build_bot(SYNTHESIZER_PROMPT,
-                            ["read_plan", "read_notes", "write_synthesis", "kb_search"],
+                            ["read_plan", "read_notes", "read_notes_focused", "write_synthesis", "kb_search"],
                             max_tokens=4096)
     synth_memory = _build_memory_context(query, "synthesis insights")
     synth_memory_block = (
         f"\n\nРелевантная cross-session память:\n{synth_memory}"
         if synth_memory else ""
     )
+    synth_status_block = "\n\n" + _build_status_context(query)
     t_syn = time.time()
     _run_agent(synthesizer,
                [{"role": "user",
-                 "content": f"Произведи пять типов инсайтов по теме: {query}{synth_memory_block}"}],
+                 "content": f"Произведи пять типов инсайтов по теме: {query}{synth_memory_block}{synth_status_block}"}],
                "💡")
     metrics.synthesis_seconds = time.time() - t_syn
 
@@ -444,6 +456,52 @@ def _latest_lessons_tail(max_lines: int = 8, max_chars: int = 1200) -> str:
         return ""
     tail = "\n".join(lines[-max_lines:])
     return tail[-max_chars:]
+
+
+def _build_status_context(query: str, focus: str = "") -> str:
+    """Сжатый статус исследования: покрытие плана, проблемные ветки, rejected evidence."""
+    plan = plan_mod.load()
+    lines: list[str] = [f"- query: {query}"]
+    if focus:
+        lines.append(f"- requested_focus: {focus}")
+
+    if plan:
+        done = [t for t in plan.tasks if t.status == "done"]
+        open_tasks = [t for t in plan.tasks if t.status == "open"]
+        in_progress = [t for t in plan.tasks if t.status == "in_progress"]
+        blocked = [t for t in plan.tasks if t.status == "blocked"]
+        lines.append(
+            f"- plan_progress: done={len(done)}/{len(plan.tasks)} open={len(open_tasks)} "
+            f"in_progress={len(in_progress)} blocked={len(blocked)}"
+        )
+        focus_task = plan.focus_task()
+        if focus_task:
+            lines.append(
+                f"- focus_task: [{focus_task.id}] {focus_task.title} "
+                f"(attempts={focus_task.attempts}, evidence={len(focus_task.evidence_refs)})"
+            )
+        undercovered = [t for t in plan.tasks if t.status in ("open", "in_progress") and not t.evidence_refs][:3]
+        if undercovered:
+            lines.append("- undercovered_tasks:")
+            lines.extend(f"  - [{t.id}] {t.title}" for t in undercovered)
+        if blocked:
+            lines.append("- blocked_tasks:")
+            lines.extend(f"  - [{t.id}] {t.title} (attempts={t.attempts})" for t in blocked[:3])
+
+    if REJECTED_PATH.exists():
+        rejected_rows = [ln for ln in REJECTED_PATH.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if rejected_rows:
+            reasons: dict[str, int] = {}
+            for line in rejected_rows:
+                try:
+                    reason = json.loads(line).get("reason", "unknown")
+                except json.JSONDecodeError:
+                    reason = "invalid_json"
+                reasons[reason] = reasons.get(reason, 0) + 1
+            reason_str = ", ".join(f"{key}={value}" for key, value in sorted(reasons.items()))
+            lines.append(f"- rejected_evidence: {len(rejected_rows)} ({reason_str})")
+
+    return "Research status:\n" + "\n".join(lines)
 
 
 def _fallback_draft_from_kb(query: str) -> None:
@@ -715,7 +773,7 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
     # Фаза 2 — writer
     print("\n✍️  Фаза 2: writer — финальный черновик")
     writer = build_bot(WRITER_PROMPT,
-                       ["read_plan", "read_notes", "read_synthesis", "read_draft",
+                       ["read_plan", "read_notes", "read_notes_focused", "read_synthesis", "read_draft",
                         "write_draft", "append_draft"],
                        max_tokens=6144)
     kb_context = _build_kb_context(query)
@@ -725,11 +783,12 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
         f"не как замену notes/KB):\n{memory_context}"
         if memory_context else ""
     )
+    status_block = "\n\n" + _build_status_context(query)
     writer_msgs = [{"role": "user",
                     "content": (f"Собери финальный отчёт по теме: {query}\n\n"
                                 f"KB context (authoritative список источников — "
                                 f"используй id и repo ИМЕННО отсюда):\n{kb_context}"
-                                f"{memory_block}")}]
+                                f"{memory_block}{status_block}")}]
     t_wr = time.time()
     resp = _run_agent(writer, writer_msgs, "✍️ ")
     metrics.writer_seconds = time.time() - t_wr
