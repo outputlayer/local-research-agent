@@ -33,6 +33,17 @@ class ToolCallTracker:
     def __init__(self, max_repeats: int = _MAX_REPEATS) -> None:
         self.history: deque[str] = deque(maxlen=_HISTORY_LEN)
         self.max_repeats = max_repeats
+        self._call_totals: dict[str, int] = {}
+        self._max_per_tool: dict[str, int] = {}
+
+    def set_budget(self, tool_name: str, max_calls: int) -> None:
+        """Устанавливает максимальное кол-во вызовов tool за сессию.
+
+        Независимо от identical-params детектора. Используется для
+        compact_notes — прогрессивная loop (разные params каждый раз из-за
+        накапливающихся escape'ов) не ловится identical-check'ом.
+        """
+        self._max_per_tool[tool_name] = max_calls
 
     @staticmethod
     def _hash_params(params) -> str:
@@ -61,7 +72,8 @@ class ToolCallTracker:
 
         repeat_count — сколько раз этот же (tool+params) встретился в
         последних `max_repeats` слотах ВКЛЮЧАЯ текущий вызов.
-        allowed=False если repeat_count >= max_repeats.
+        allowed=False если repeat_count >= max_repeats ИЛИ превышён
+        set_budget лимит для данного tool.
         """
         key = f"{tool_name}:{self._hash_params(params)}"
         # смотрим последние (max_repeats - 1) записей — если все они
@@ -69,13 +81,22 @@ class ToolCallTracker:
         # подряд одинаковым → блок.
         window = list(self.history)[-(self.max_repeats - 1):]
         repeat_count = 1 + sum(1 for k in window if k == key)
+        # Проверка per-tool бюджета (total calls за сессию).
+        total = self._call_totals.get(tool_name, 0) + 1
+        budget = self._max_per_tool.get(tool_name)
+        if budget is not None and total > budget:
+            # Не добавляем в историю (вызов заблокирован).
+            return False, repeat_count
         allowed = repeat_count < self.max_repeats
         if allowed:
             self.history.append(key)
+            self._call_totals[tool_name] = total
         return allowed, repeat_count
 
     def reset(self) -> None:
         self.history.clear()
+        self._call_totals.clear()
+        # _max_per_tool — не сбрасываем: бюджеты задаются один раз при старте
 
 
 # Глобальный singleton, сбрасывается между прогонами через reset_tracker().
@@ -86,6 +107,11 @@ _TRACKER = ToolCallTracker()
 def check_call(tool_name: str, params) -> tuple[bool, int]:
     """Публичное API — делегирует в глобальный tracker."""
     return _TRACKER.check(tool_name, params)
+
+
+def set_tool_budget(tool_name: str, max_calls: int) -> None:
+    """Устанавливает максимальный бюджет вызовов за сессию для tool_name."""
+    _TRACKER.set_budget(tool_name, max_calls)
 
 
 def reset_tracker() -> None:

@@ -22,6 +22,7 @@ from ..memory import ensure_dir
 from ..utils import (
     extract_ids,
     extract_topic_keywords_tiered,
+    has_anti_keyword,
     keyword_set,
 )
 
@@ -70,6 +71,11 @@ def domain_gate(content: str) -> tuple[bool, str, set[str], set[str]]:
     header_kws, seed_kws = extract_topic_keywords_tiered(_cfg.PLAN_PATH.read_text(encoding="utf-8"))
     if len(header_kws) < 2:
         return True, "slow_start", header_kws, set()
+    # Явные anti-keywords: audio vocoder, jailbreak, automotive lidar —
+    # блокируем ДО positive-check чтобы не тратить overlap-слоты.
+    anti = has_anti_keyword(content)
+    if anti:
+        return False, f"anti_keyword:{anti}", set(), set()
     # Собираем материал из kb для id, упомянутых в content.
     ids_in_content = extract_ids(content)
     abstracts: list[str] = [content]
@@ -107,6 +113,9 @@ def gate_paper_for_kb(paper_id: str, title: str, abstract: str) -> tuple[bool, s
     header_kws, _ = extract_topic_keywords_tiered(_cfg.PLAN_PATH.read_text(encoding="utf-8"))
     if len(header_kws) < 2:
         return True, "slow_start", set(), header_kws
+    anti = has_anti_keyword(f"{title} {abstract}")
+    if anti:
+        return False, f"anti_keyword:{anti}", set(), header_kws
     kws = keyword_set(f"{title} {abstract}")
     o_h = kws & header_kws
     if not o_h:
@@ -115,6 +124,33 @@ def gate_paper_for_kb(paper_id: str, title: str, abstract: str) -> tuple[bool, s
     if len(o_h) < min_hits:
         return False, "weak_overlap", o_h, header_kws
     return True, "passed", o_h, header_kws
+
+
+def gate_repo_for_kb(repo_name: str, description: str) -> tuple[bool, str]:
+    """Gate для GitHub-репо перед авто-сохранением в kb.jsonl.
+
+    ComVo (hs-oh-prml/ComVo) — audio vocoder, desc: 'neural vocoder for audio synthesis'.
+    Без этого gate он сохраняется в KB т.к. desc не проверялся.
+
+    Returns (passed, reason). reason ∈ {"bypass", "slow_start", "anti_keyword",
+    "no_core_hit", "weak_overlap", "passed"}.
+    """
+    if not _cfg.CFG.get("strict_domain_gate", True) or not _cfg.PLAN_PATH.exists():
+        return True, "bypass"
+    anti = has_anti_keyword(f"{repo_name} {description}")
+    if anti:
+        return False, f"anti_keyword:{anti}"
+    header_kws, _ = extract_topic_keywords_tiered(_cfg.PLAN_PATH.read_text(encoding="utf-8"))
+    if len(header_kws) < 2:
+        return True, "slow_start"
+    kws = keyword_set(f"{repo_name} {description}")
+    o_h = kws & header_kws
+    if not o_h:
+        return False, "no_core_hit"
+    min_hits = 1 if len(header_kws) <= 4 else 2
+    if len(o_h) < min_hits:
+        return False, "weak_overlap"
+    return True, "passed"
 
 
 def _log_kb_rejected(paper_id: str, title: str, reason: str,
@@ -211,6 +247,16 @@ def _wrap_with_logging(cls):
             from lra import tool_tracker
             allowed, n = tool_tracker.check_call(tool_name, params)
             if not allowed:
+                budget = tool_tracker._TRACKER._max_per_tool.get(tool_name)
+                total = tool_tracker._TRACKER._call_totals.get(tool_name, n)
+                if budget is not None and total > budget:
+                    log.warning("[TOOL_BUDGET] %s заблокирован: превышен бюджет %d/%d вызовов за сессию",
+                                tool_name, total, budget)
+                    return (
+                        f"ошибка: budget exceeded — {tool_name} уже вызван {total} раз "
+                        f"(лимит {budget} за сессию). Переходи к следующему шагу плана. "
+                        f"Не вызывай {tool_name} больше в этом прогоне."
+                    )
                 log.warning("[TOOL_LOOP] %s заблокирован: %d-й идентичный вызов подряд", tool_name, n)
                 return (
                     f"ошибка: loop detected — {tool_name} вызван {n} раз подряд "

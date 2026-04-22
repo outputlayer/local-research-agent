@@ -29,7 +29,6 @@ from .config import (
     SYNTHESIS_PATH,
 )
 from .logger import get_logger
-from .memory import reset_research
 from .metrics import (
     CriticRound,
     IterationMetric,
@@ -194,7 +193,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     writer/critic (×critic_rounds) → validator цитат."""
     from lra import tool_tracker
     tool_tracker.reset_tracker()
-    reset_research(query)
+    tool_tracker.set_tool_budget("compact_notes", 4)  # предотвращает compact_notes loop (см. tool_tracker.py)
     metrics = RunMetrics(query=query)
     print(f"📁 Рабочая папка: {RESEARCH_DIR}\n")
 
@@ -779,6 +778,7 @@ def resume_research(query: str | None = None, critic_rounds: int = 2):
 
     from lra import tool_tracker
     tool_tracker.reset_tracker()
+    tool_tracker.set_tool_budget("compact_notes", 4)  # предотвращает compact_notes loop
     print(f"🔄 RESUME: продолжаем прогон по теме: {query}")
     print(f"📁 Рабочая папка: {RESEARCH_DIR}")
     have = {

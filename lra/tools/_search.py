@@ -275,6 +275,11 @@ class GithubSearch(BaseTool):
                 f"         {desc}"
             )
             if name != "?" and stars >= 10:
+                passed, reason = _helpers.gate_repo_for_kb(name, desc)
+                if not passed:
+                    _helpers.log.debug("github repo gate skipped %s (%s)", name, reason)
+                    lines[-1] += f"\n         ⊘ gate:{reason} — не сохранено в kb"
+                    continue
                 try:
                     kb_mod.add(kb_mod.Atom(
                         id=name, kind="repo", topic=cleaned_query,

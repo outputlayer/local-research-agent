@@ -143,10 +143,7 @@ def test_gate_paper_for_kb_blocks_comvo(_isolated):
         "with adversarial training and phase representation",
     )
     assert passed is False
-    assert reason == "no_core_hit"
-
-
-def test_gate_paper_for_kb_passes_ew_paper(_isolated):
+    assert reason.startswith("anti_keyword")  # vocoder в ANTI_KEYWORDS, reason=anti_keyword:vocoder(_isolated):
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     passed, reason, _o, _h = tools.gate_paper_for_kb(
@@ -197,6 +194,54 @@ def test_gate_paper_for_kb_logs_rejection_to_jsonl(_isolated):
     tools._log_kb_rejected("2603.11589", "ComVo vocoder", reason, o_h, h, source="hf_papers")
     lines = (_isolated / "rejected.jsonl").read_text(encoding="utf-8").strip().splitlines()
     entry = json.loads(lines[-1])
-    assert entry["reason"] == "kb_autosave:no_core_hit"
+    assert entry["reason"].startswith("kb_autosave:anti_keyword")  # anti_keyword:vocoder
     assert entry["paper_id"] == "2603.11589"
     assert entry["source"] == "hf_papers"
+
+
+def test_anti_keyword_blocks_jailbreak_paper(_isolated):
+    """LLM-safety/jailbreak paper не должен проходить domain gate."""
+    from lra import tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    passed, reason, _o, _h = tools.gate_paper_for_kb(
+        "2507.22564",
+        "Exploiting Synergistic Cognitive Biases to Bypass Safety in LLMs",
+        "We exploit cognitive biases to jailbreak safety alignment in large language models.",
+    )
+    assert passed is False
+    assert "anti_keyword" in reason  # e.g. anti_keyword:jailbreak or anti_keyword:safety alignment
+
+
+def test_anti_keyword_does_not_block_relevant_ew_paper(_isolated):
+    """Релевантный EW paper без anti-keywords проходит."""
+    from lra import tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    passed, reason, _o, _h = tools.gate_paper_for_kb(
+        "2506.11048",
+        "CMuSeNet: Complex-Valued Multi-Signal Segmentation",
+        "Electronic warfare spectrum sensing using complex-valued neural networks for ELINT.",
+    )
+    assert passed is True
+
+
+def test_gate_repo_for_kb_blocks_comvo(_isolated):
+    """GitHub gate должен блокировать audio vocoder репо."""
+    from lra import tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    passed, reason = tools.gate_repo_for_kb(
+        "hs-oh-prml/ComVo",
+        "neural vocoder for audio synthesis from mel-spectrogram",
+    )
+    assert passed is False
+    assert "vocoder" in reason or "anti_keyword" in reason
+
+
+def test_gate_repo_for_kb_passes_ew_repo(_isolated):
+    """EW-релевантное репо должно проходить."""
+    from lra import tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    passed, reason = tools.gate_repo_for_kb(
+        "example/radar-jamming-drl",
+        "Deep reinforcement learning for electronic warfare anti-jamming radar spectrum sensing",
+    )
+    assert passed is True

@@ -70,6 +70,7 @@ from ._helpers import (
     _wrap_with_logging,
     domain_gate,
     gate_paper_for_kb,
+    gate_repo_for_kb,
     log,
     verify_ids_against_kb,
 )
@@ -83,7 +84,7 @@ __all__ = [
     "SYNTHESIS_PATH", "QUERYLOG_PATH", "CFG",
     "ARXIV_RECENT_DAYS", "GITHUB_RECENT_DAYS", "MAX_GITHUB_QUERY_WORDS",
     # helpers
-    "verify_ids_against_kb", "domain_gate", "gate_paper_for_kb",
+    "verify_ids_against_kb", "domain_gate", "gate_paper_for_kb", "gate_repo_for_kb",
     "_log_rejected", "_log_kb_rejected",
     "_fetch_text", "_parse_arxiv_feed", "log",
     "_wrap_with_logging",

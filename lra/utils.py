@@ -210,6 +210,34 @@ def keyword_set(s: str) -> set[str]:
     return {w.lower() for w in re.findall(r"[A-Za-zА-Яа-я][A-Za-zА-Яа-я\-]{4,}", s)}
 
 
+# Явные anti-keywords: если хотя бы один встречается в abstract/description — бумага
+# не относится к EW/ELINT/радарной тематике, отклоняем без подсчёта overlap.
+# Мотивация: "cognitive" есть в EW_CORE, но та же ComVo/emotional-support/LLM-safety
+# статья может иметь 1-2 случайных совпадения с header и пройти gate. Anti-list
+# срабатывает РАНЬШЕ positive-check и возвращает (False, "anti_keyword").
+ANTI_KEYWORDS: frozenset[str] = frozenset({
+    # audio/speech domain
+    "vocoder", "text-to-speech", "tts", "mel-spectrogram", "waveform-synthesis",
+    "audio-synthesis", "audio generation", "speech synthesis",
+    # jailbreak / LLM safety (не ELINT-security)
+    "jailbreak", "jailbreaking", "safety alignment", "llm safety",
+    "harmful content", "red teaming", "prompt injection",
+    # automotive / lidar
+    "self-driving", "autonomous driving", "lidar", "automotive radar",
+    # emotional support / dialog
+    "emotional support conversation", "emotional support", "empathetic dialog",
+})
+
+
+def has_anti_keyword(text: str) -> str | None:
+    """Возвращает первый найденный anti-keyword в тексте, или None."""
+    lower = text.lower()
+    for kw in ANTI_KEYWORDS:
+        if kw in lower:
+            return kw
+    return None
+
+
 # Generic-слова из plan.md, которые НЕ должны служить domain-якорем:
 # встречаются в любом научном abstract и дают false positive overlap.
 _TOPIC_GENERIC = frozenset({

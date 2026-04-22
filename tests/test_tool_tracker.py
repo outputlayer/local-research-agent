@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from lra.tool_tracker import ToolCallTracker, check_call, reset_tracker
+from lra.tool_tracker import ToolCallTracker, check_call, reset_tracker, set_tool_budget
 
 
 def test_tracker_allows_first_three_different_calls():
@@ -98,6 +98,42 @@ def test_global_check_call_and_reset():
     assert not allowed
     reset_tracker()
     assert check_call("foo", {"a": 1}) == (True, 1)
+
+
+def test_budget_blocks_after_n_total_calls():
+    """set_budget(tool, n) должен блокировать вызов n+1 даже с разными params."""
+    t = ToolCallTracker(max_repeats=10)  # large repeats — блокирует только budget
+    t.set_budget("compact_notes", 3)
+    assert t.check("compact_notes", {"content": "a"}) == (True, 1)
+    assert t.check("compact_notes", {"content": "b"}) == (True, 1)
+    assert t.check("compact_notes", {"content": "c"}) == (True, 1)
+    # 4-й вызов (n+1) должен быть заблокирован бюджетом
+    allowed, _ = t.check("compact_notes", {"content": "d"})
+    assert not allowed
+
+
+def test_budget_resets_with_reset():
+    """После reset() бюджет (totals) сбрасывается, _max_per_tool сохраняется."""
+    t = ToolCallTracker(max_repeats=10)
+    t.set_budget("compact_notes", 2)
+    t.check("compact_notes", {"content": "x"})
+    t.check("compact_notes", {"content": "y"})
+    allowed_before, _ = t.check("compact_notes", {"content": "z"})
+    assert not allowed_before  # бюджет исчерпан
+    t.reset()
+    # после reset — бюджет снова доступен (totals = 0)
+    allowed_after, _ = t.check("compact_notes", {"content": "z"})
+    assert allowed_after
+
+
+def test_set_tool_budget_public_api():
+    """set_tool_budget() публичное API работает через глобальный tracker."""
+    reset_tracker()
+    set_tool_budget("compact_notes", 2)
+    assert check_call("compact_notes", {"content": "a"})[0] is True
+    assert check_call("compact_notes", {"content": "b"})[0] is True
+    assert check_call("compact_notes", {"content": "c"})[0] is False  # > budget
+    reset_tracker()  # cleanup
 
 
 # ── интеграция с обёрнутыми tool'ами ─────────────────────────────────────
