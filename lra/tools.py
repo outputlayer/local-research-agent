@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC
+from urllib.parse import urlencode
+from urllib.request import urlopen
+from xml.etree import ElementTree as ET
 
 from qwen_agent.tools.base import BaseTool, register_tool
 
@@ -34,6 +37,8 @@ from .utils import (
 )
 
 log = get_logger("tools")
+
+_ARXIV_FEED_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
 
 def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
@@ -130,6 +135,33 @@ def _log_rejected(content: str, ids: set[str], reason: str,
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def _fetch_text(url: str, timeout: int = 20) -> str:
+    with urlopen(url, timeout=timeout) as resp:  # noqa: S310 - controlled arXiv endpoint
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def _parse_arxiv_feed(xml_text: str) -> list[dict[str, str]]:
+    root = ET.fromstring(xml_text)
+    entries: list[dict[str, str]] = []
+    for entry in root.findall("atom:entry", _ARXIV_FEED_NS):
+        id_text = (entry.findtext("atom:id", default="", namespaces=_ARXIV_FEED_NS) or "").strip()
+        m = re.search(r"(\d{4}\.\d{4,5})(?:v\d+)?", id_text)
+        if not m:
+            continue
+        authors = [
+            (node.findtext("atom:name", default="", namespaces=_ARXIV_FEED_NS) or "").strip()
+            for node in entry.findall("atom:author", _ARXIV_FEED_NS)
+        ]
+        entries.append({
+            "id": m.group(1),
+            "title": " ".join((entry.findtext("atom:title", default="", namespaces=_ARXIV_FEED_NS) or "").split()),
+            "summary": " ".join((entry.findtext("atom:summary", default="", namespaces=_ARXIV_FEED_NS) or "").split()),
+            "published_at": (entry.findtext("atom:published", default="", namespaces=_ARXIV_FEED_NS) or "").strip(),
+            "authors": ", ".join(a for a in authors[:4] if a),
+        })
+    return entries
+
+
 @register_tool("hf_papers")
 class HfPapers(BaseTool):
     description = ("Поиск научных статей на Hugging Face Papers через локальный `hf` CLI. "
@@ -215,6 +247,104 @@ class HfPapers(BaseTool):
                     auto_saved += 1
                 except Exception as e:
                     log.debug("kb auto-save paper failed %s: %s", pid, e)
+        footer_parts = []
+        if auto_saved:
+            footer_parts.append(f"📥 авто-сохранено в kb: {auto_saved}")
+        if auto_filtered:
+            footer_parts.append(f"🚫 отфильтровано domain gate: {auto_filtered}")
+        footer = f"\n\n({', '.join(footer_parts)})" if footer_parts else ""
+        return "\n\n".join(lines) + footer + stale_note
+
+
+@register_tool("arxiv_search")
+class ArxivSearch(BaseTool):
+    description = (
+        "Fallback-поиск статей через arXiv API. Используй когда hf_papers пуст, "
+        "устарел или не нашёл нужную подтему. Возвращает arxiv-id, заголовок, "
+        "авторов, дату и abstract."
+    )
+    parameters = [
+        {"name": "query", "type": "string", "description": "Запрос", "required": True},
+        {"name": "limit", "type": "integer", "description": "Сколько результатов (1-10)", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        query = (p.get("query") or "").strip()
+        if not query:
+            return "ошибка: query обязателен"
+        limit = max(1, min(int(p.get("limit", 5)), 10))
+        dedup_key = f"arxiv: {query}"
+        if normalize_query(dedup_key) in seen_queries():
+            return (f"ОТКАЗ: запрос '{query}' уже выполнялся через arxiv_search в этой сессии. "
+                    "Переформулируй или читай read_notes/kb_search.")
+        fuzzy = is_similar_to_seen(dedup_key)
+        if fuzzy and fuzzy != dedup_key:
+            return (f"ОТКАЗ: arxiv_search '{query}' слишком похож на уже выполненный '{fuzzy}'. "
+                    "Смени термины, автора или год.")
+        log_query(dedup_key)
+
+        url = "http://export.arxiv.org/api/query?" + urlencode({
+            "search_query": f"all:{query}",
+            "start": 0,
+            "max_results": limit * 2,
+            "sortBy": "submittedDate",
+            "sortOrder": "descending",
+        })
+        try:
+            xml_text = _fetch_text(url, timeout=20)
+        except TimeoutError:
+            return "таймаут поиска arxiv_search"
+        except Exception as exc:
+            return f"ошибка arxiv_search: {str(exc)[:300]}"
+
+        try:
+            data = _parse_arxiv_feed(xml_text)
+        except Exception:
+            return f"не удалось распарсить arXiv feed: {xml_text[:300]}"
+        if not data:
+            return f"нет результатов arxiv_search: {query}"
+
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now(UTC) - timedelta(days=ARXIV_RECENT_DAYS)).date().isoformat()
+        fresh = [x for x in data if (x.get("published_at") or "")[:10] >= cutoff]
+        stale_note = ""
+        if fresh:
+            data = fresh[:limit]
+        else:
+            data = data[:limit]
+            stale_note = (f"\n\n⚠️  все результаты старше {ARXIV_RECENT_DAYS // 365} лет "
+                          f"(cutoff={cutoff}) — показаны как fallback")
+
+        lines = []
+        auto_saved = 0
+        auto_filtered = 0
+        for paper in data:
+            pid = paper.get("id", "")
+            title = paper.get("title", "")
+            summary = paper.get("summary", "")[:800]
+            authors = paper.get("authors", "")
+            date = (paper.get("published_at", "") or "")[:10]
+            lines.append(
+                f"[{pid}] {title}\n  {authors} · {date}\n  https://arxiv.org/abs/{pid}\n  {summary}"
+            )
+            if pid:
+                passed, reason = gate_paper_for_kb(pid, title, summary)
+                if not passed:
+                    auto_filtered += 1
+                    log.debug("kb auto-save skipped %s (%s)", pid, reason)
+                    continue
+                try:
+                    kb_mod.add(kb_mod.Atom(
+                        id=pid, kind="paper", topic=query,
+                        title=title[:200], authors=authors[:200],
+                        url=f"https://arxiv.org/abs/{pid}",
+                        claim=summary[:400],
+                    ))
+                    auto_saved += 1
+                except Exception as e:
+                    log.debug("kb auto-save arxiv paper failed %s: %s", pid, e)
+
         footer_parts = []
         if auto_saved:
             footer_parts.append(f"📥 авто-сохранено в kb: {auto_saved}")
@@ -938,4 +1068,3 @@ for _name, _obj in list(globals().items()):
     if isinstance(_obj, type) and issubclass(_obj, BaseTool) and _obj is not BaseTool:
         if _obj.__module__ == __name__:
             _wrap_with_logging(_obj)
-
