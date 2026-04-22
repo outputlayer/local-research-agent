@@ -907,6 +907,21 @@ def _wrap_with_logging(cls):
             preview_src = str(params)
         preview = (preview_src or "").replace("\n", " ")[:160]
         log.info("[TOOL_CALL] %s(%s)", tool_name, preview)
+        # Loop detection: блокируем N-ный подряд идентичный вызов.
+        # See lra/tool_tracker.py для мотивации (run.log compact_notes x16).
+        try:
+            from lra import tool_tracker
+            allowed, n = tool_tracker.check_call(tool_name, params)
+            if not allowed:
+                log.warning("[TOOL_LOOP] %s заблокирован: %d-й идентичный вызов подряд", tool_name, n)
+                return (
+                    f"ошибка: loop detected — {tool_name} вызван {n} раз подряд "
+                    f"с одинаковыми params. Смени стратегию: попробуй другой "
+                    f"tool, измени params или перейди к следующему шагу плана."
+                )
+        except Exception as _loop_err:
+            # tracker-баг не должен ронять tool execution
+            log.debug("tool_tracker error: %s", _loop_err)
         try:
             return orig(self, params, **kwargs)
         except Exception as e:

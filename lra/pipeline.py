@@ -170,6 +170,8 @@ def _bootstrap_initial_plan(query: str) -> bool:
 def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     """Полный пайплайн: explorer/replanner (×depth) → compressor → synthesizer →
     writer/critic (×critic_rounds) → validator цитат."""
+    from lra import tool_tracker
+    tool_tracker.reset_tracker()
     reset_research(query)
     metrics = RunMetrics(query=query)
     print(f"📁 Рабочая папка: {RESEARCH_DIR}\n")
@@ -766,6 +768,8 @@ def resume_research(query: str | None = None, critic_rounds: int = 2):
     if not query:
         raise RuntimeError("не могу восстановить query: передай явно или убедись что plan.md существует")
 
+    from lra import tool_tracker
+    tool_tracker.reset_tracker()
     print(f"🔄 RESUME: продолжаем прогон по теме: {query}")
     print(f"📁 Рабочая папка: {RESEARCH_DIR}")
     have = {
