@@ -74,9 +74,9 @@ def test_multiple_ids_mixed():
     draft = (
         "The transformer [2301.11111] uses attention and multihead normalization training.\n"
         "Sparse mixture [2302.22222] employs routing for conditional computation scaling.\n"
-        "And a hallucinated [2999.99999] reference.\n"
+        "And a hallucinated [2312.99999] reference.\n"
     )
     valid, invalid, suspicious = validate_draft_ids(draft, notes, run_hf_info=False)
-    assert invalid == ["2999.99999"]
+    assert invalid == ["2312.99999"]
     assert valid == 2
     assert suspicious == []

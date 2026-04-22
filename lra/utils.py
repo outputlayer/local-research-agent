@@ -132,7 +132,15 @@ def normalize_query(q: str) -> str:
     return re.sub(r"\s+", " ", q.strip().lower())
 
 
-ARXIV_RE = re.compile(r"\b(\d{4}\.\d{4,5})\b")
+# Arxiv-id: YYMM.NNNNN (YY=год, MM=01-12 месяц, N=4-5 цифр seq).
+# Строгая версия (2026-04): negative lookahead/behind отсекают:
+#   - десятичные числа в тексте ("effect size 2504.03 mm/s" — только 2 цифры, но 2504.03456 матчился бы)
+#   - обрывки id ("2301.123456" → 6 цифр, не arxiv)
+#   - id внутри длиннее числа ("A12301.12345", "2301.12345.67")
+# MM=01-12 чтобы "2013.12345" (невалидный месяц 13) не матчился.
+ARXIV_RE = re.compile(
+    r"(?<![\d.])(\d{2}(?:0[1-9]|1[0-2])\.\d{4,5})(?![\d.])"
+)
 
 # Стоп-слова для keyword-overlap проверок (используются валидатором).
 STOPWORDS = frozenset({"paper", "paperов", "статья", "работа", "авторы", "model", "method"})

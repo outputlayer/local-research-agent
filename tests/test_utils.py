@@ -85,6 +85,27 @@ class TestCountArxivIds:
         text = "[2301.12345] is cited again as [2301.12345]"
         assert extract_ids(text) == {"2301.12345"}
 
+    def test_decimal_in_prose_not_matched(self):
+        """Короткие decimal не матчатся (<4 цифр seq)."""
+        assert extract_ids("measured 2504.03 mm/s") == set()
+        assert extract_ids("version 2.123") == set()
+        # секвенс >5 цифр также отсекается
+        assert extract_ids("factor 2301.123456 bias") == set()
+
+    def test_invalid_month_not_matched(self):
+        """MM=13 невалидный месяц, не arxiv."""
+        assert extract_ids("[2013.12345]") == set()
+        assert extract_ids("[2399.12345]") == set()
+
+    def test_valid_edge_months(self):
+        """MM=01 и MM=12 ok."""
+        assert extract_ids("[2401.12345]") == {"2401.12345"}
+        assert extract_ids("[2312.12345]") == {"2312.12345"}
+
+    def test_leading_digit_blocks_match(self):
+        """Не матчим середину более длинной цифры."""
+        assert extract_ids("A12301.12345") == set()
+
 
 class TestKeywordSet:
     def test_extracts_words_5plus_chars(self):
