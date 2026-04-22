@@ -227,6 +227,8 @@ _TOPIC_GENERIC = frozenset({
     # локальный шум из seeds типа "ELINT fingerprinting in urban canyons"
     "canyons", "canyon", "contested", "environments", "environment",
     "algorithm", "algorithms", "architecture", "architectures",
+    # ложные keywords из структуры plan.md (заголовки и metadata, не domain-terms)
+    "vocabulary",  # из "**Core vocabulary:**" — заголовок, не домен
     "современ", "современные", "подход", "подходы", "обзор", "анализ",
     "метод", "методы", "система", "системы", "модель", "модели",
     "статья", "работа", "работы", "исследование", "исследования",

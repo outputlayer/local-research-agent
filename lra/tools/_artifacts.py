@@ -83,12 +83,14 @@ class AppendNotes(BaseTool):
         if _cfg.CFG.get("notes_strict", True):
             known, unknown = verify_ids_against_kb(content)
             if unknown:
-                return (f"ОТКАЗ: в заметке упомянуты arxiv-id, которых НЕТ в kb.jsonl: "
-                        f"{sorted(unknown)}. Это признак галлюцинации. "
-                        "Сначала вызови hf_papers или kb_search по нужной теме, чтобы получить "
-                        "ВЕРИФИЦИРОВАННЫЙ [arxiv-id], затем повторно append_notes. "
-                        "Либо перепиши без этих id, цитируя только известные: "
-                        f"{sorted(known) or '(пока нет)'}.")
+                return (
+                    f"ОТКАЗ: в заметке упомянуты arxiv-id, которых НЕТ в kb.jsonl: "
+                    f"{sorted(unknown)}. Добавь их сначала через kb_add (для каждого id: "
+                    "kb_add(id=..., kind='paper', title=..., claim=..., url=...)) "
+                    "или через hf_papers/kb_search, чтобы получить верифицированную запись, "
+                    "затем СРАЗУ ЖЕ повтори append_notes с тем же самым content. "
+                    "Не пиши промежуточных ответов — только tool-call kb_add, затем tool-call append_notes. "
+                    f"Уже известны: {sorted(known) or '(пусто)'}.")
         ids = extract_ids(content)
         if _cfg.CFG.get("strict_domain_gate", True) and ids:
             passed, reason, o_h, o_s = domain_gate(content)
