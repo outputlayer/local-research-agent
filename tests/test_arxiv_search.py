@@ -49,7 +49,7 @@ def test_arxiv_search_filters_old_and_autosaves(tmp_path, monkeypatch):
         {"id": "2201.00001v1", "title": "Old Radar EW", "summary": "old radar result",
          "published_at": old, "authors": ["Carol"]},
     )
-    monkeypatch.setattr(tools, "_fetch_text", lambda url, timeout=20: xml)
+    monkeypatch.setattr(tools._helpers, "_fetch_text", lambda url, timeout=20: xml)
 
     out = tool.call({"query": "electronic warfare radar", "limit": 5})
 
@@ -66,7 +66,7 @@ def test_arxiv_search_fallback_when_all_old(tmp_path, monkeypatch):
         {"id": "2201.00001v1", "title": "Legacy Paper", "summary": "legacy result",
          "published_at": old, "authors": ["Alice"]},
     )
-    monkeypatch.setattr(tools, "_fetch_text", lambda url, timeout=20: xml)
+    monkeypatch.setattr(tools._helpers, "_fetch_text", lambda url, timeout=20: xml)
 
     out = tool.call({"query": "legacy niche radar", "limit": 5})
 
@@ -87,7 +87,7 @@ def test_arxiv_search_domain_gate_skips_offtopic_autosave(tmp_path, monkeypatch)
          "summary": "emotional support dialogue generation with empathy",
          "published_at": fresh, "authors": ["Alice"]},
     )
-    monkeypatch.setattr(tools, "_fetch_text", lambda url, timeout=20: xml)
+    monkeypatch.setattr(tools._helpers, "_fetch_text", lambda url, timeout=20: xml)
 
     out = tool.call({"query": "support dialogue", "limit": 5})
 
