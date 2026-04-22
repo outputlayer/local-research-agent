@@ -47,6 +47,25 @@ def test_suspicious_when_citation_context_mismatches_notes():
     assert "overlap=" in suspicious[0]
 
 
+def test_citation_laundering_caught_at_threshold_5():
+    # Реальный сценарий из live run'а: writer берёт arxiv-id из notes,
+    # но переатрибутирует claim под тему запроса. Жаргон частично
+    # пересекается (complex-valued/adversarial/neural), но тема разная:
+    # notes → audio vocoder, draft → EW countermeasures.
+    # Threshold 3 такое пропускал, 5 ловит.
+    notes = (
+        "[2603.11589] ComVo audio vocoder complex-valued adversarial training "
+        "waveform generation Korea University phase representation iSTFT"
+    )
+    draft = (
+        "Cognitive EW countermeasures [2603.11589] applies complex-valued adversarial "
+        "jamming against enemy radar systems with 72% success rate"
+    )
+    valid, invalid, suspicious = validate_draft_ids(draft, notes, run_hf_info=False)
+    assert valid == 1
+    assert len(suspicious) == 1, f"citation laundering должен ловиться, overlap={suspicious}"
+
+
 def test_multiple_ids_mixed():
     notes = (
         "[2301.11111] Transformer architecture attention multihead normalization training\n"

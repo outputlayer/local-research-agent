@@ -68,7 +68,11 @@ def validate_draft_ids(
         draft_kw = keyword_set(draft_ctx) - STOPWORDS
         notes_kw = keyword_set(notes_ctx)
         overlap = draft_kw & notes_kw
-        if len(overlap) < 3:
+        # Порог: раньше было 3 — слишком мягко. Технический жаргон
+        # (complex-valued/adversarial/FMCW) легко даёт 3 совпадения даже при
+        # полностью выдуманном claim'е. 5 — эмпирически отсекает
+        # citation-laundering без false-positive на корректных пересказах.
+        if len(overlap) < 5:
             suspicious.append(f"{pid} (overlap={len(overlap)})")
         valid += 1
     return valid, invalid, suspicious
