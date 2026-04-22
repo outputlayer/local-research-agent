@@ -20,7 +20,7 @@ from lra.config import (
 )
 from lra.kb import KB_PATH
 from lra.llm import get_mlx
-from lra.pipeline import research_loop, resume_research
+from lra.pipeline import _build_status_context, research_loop, resume_research
 from lra.plan import PLAN_JSON_PATH
 
 
@@ -57,6 +57,7 @@ def main():
     print("✅ Готово. Команды:")
     print("   <тема>              — запустить ресёрч (alias: /research <тема>)")
     print("   /resume             — дописать отчёт из существующих notes/synthesis/kb (без explorer)")
+    print("   /status [тема]      — показать статус текущего research (план, rejected evidence)")
     print("   /hitl on|off        — переключить human-in-the-loop паузу после валидатора")
     print("   /clean              — очистить рабочую папку (lessons/querylog остаются)")
     print("   /forget             — стереть + глобальную Reflexion-память (archive и cache сохраняются)")
@@ -75,6 +76,11 @@ def main():
             return
         if q == "/resume":
             resume_research()
+            print()
+            continue
+        if q.startswith("/status"):
+            topic = q[len("/status"):].strip() or "(текущий research)"
+            print(_build_status_context(topic))
             print()
             continue
         if q.startswith("/hitl"):
