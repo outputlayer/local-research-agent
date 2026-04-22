@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    # macos-14 — Apple Silicon runner, необходим для mlx-lm (нет Linux/Intel wheels)
+    runs-on: macos-14
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # mlx-lm иногда без свежих wheels — не валим CI если его не поставить
+          pip install -r requirements.txt || pip install qwen-agent==0.0.34 json5==0.14.0 pytest==9.0.3
+          pip install ruff
+
+      - name: Ruff lint
+        run: ruff check lra tests agent.py
+
+      - name: Pytest
+        run: python -m pytest -q
