@@ -23,6 +23,22 @@ def parse_args(params) -> dict:
     for tail in ("</arguments>", "</arguments", "</tool_call>", "</tool_call", "```"):
         if s.endswith(tail):
             s = s[: -len(tail)].rstrip()
+
+    # Double-encoded JSON: LLM иногда оборачивает args в JSON string literal
+    # вместо JSON object — `"{\"content\": \"markdown\"}"`. Если мы оставим как есть,
+    # json5.loads распарсит это в обычную python-строку, _wrap обернёт → в файл
+    # улетит сериализованный JSON-блоб вместо markdown (виден в draft.md этой сессии).
+    # Разворачиваем до 3 уровней обёртки (больше не встречали).
+    for _ in range(3):
+        if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
+            try:
+                inner = json.loads(s)
+                if isinstance(inner, str) and inner.lstrip()[:1] in ('{', '"'):
+                    s = inner.strip()
+                    continue
+            except Exception:
+                pass
+        break
     # balanced-brace trim: отсекаем любой хвост после последней `}` на верхнем уровне
     if s.startswith("{"):
         depth = 0

@@ -50,6 +50,19 @@ class TestParseArgs:
         out = parse_args(raw)
         assert out["content"] == 'He said "hi" today'
 
+    def test_double_encoded_json_unwrapped(self):
+        # Qwen иногда оборачивает args в JSON string literal вместо объекта.
+        # Без unwrap json5 бы распарсил это в python-строку и мы бы записали
+        # сериализованный JSON-блоб в draft.md (виден был в одном прогоне).
+        raw = r'"{\"content\": \"hello\"}"'
+        out = parse_args(raw)
+        assert out == {"content": "hello"}
+
+    def test_triple_encoded_json_unwrapped(self):
+        raw = r'"\"{\\\"content\\\": \\\"deep\\\"}\""'
+        out = parse_args(raw)
+        assert out == {"content": "deep"}
+
 
 class TestNormalizeQuery:
     def test_lower_and_trim(self):
