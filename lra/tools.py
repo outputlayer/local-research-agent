@@ -19,11 +19,19 @@ from .config import (
     NOTES_PATH,
     PLAN_PATH,
     QUERYLOG_PATH,
+    REJECTED_PATH,
     SYNTHESIS_PATH,
 )
 from .logger import get_logger
 from .memory import ensure_dir, is_similar_to_seen, log_query, seen_queries
-from .utils import extract_ids, get_content, normalize_query, parse_args
+from .utils import (
+    extract_ids,
+    extract_topic_keywords,
+    get_content,
+    keyword_set,
+    normalize_query,
+    parse_args,
+)
 
 log = get_logger("tools")
 
@@ -40,6 +48,52 @@ def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
         return set(), set()
     known_in_kb = {a.get("id", "") for a in kb_mod.load() if a.get("kind") == "paper"}
     return ids & known_in_kb, ids - known_in_kb
+
+
+def domain_gate(content: str, min_hits: int = 2) -> tuple[bool, set[str], set[str]]:
+    """Проверяет что content относится к домену запроса (из plan.md).
+
+    Возвращает (passed, topic_kws, overlap). Pass = |overlap(content_kws, topic_kws)| ≥ min_hits.
+    Если plan.md отсутствует или пуст — pass=True (тема ещё не задана, ничего не фильтруем).
+
+    Применяется только к записям с arxiv-id — reflection/meta-заметки без id не фильтруются.
+    """
+    if not PLAN_PATH.exists():
+        return True, set(), set()
+    topic_kws = extract_topic_keywords(PLAN_PATH.read_text(encoding="utf-8"))
+    # Slow-start guard: если в plan.md меньше 3 специфичных доменных слов, тема
+    # ещё не кристаллизовалась (generic seeds) — gate блокировал бы всё подряд.
+    # Пропускаем: notes_strict + validator финально поймают citation laundering.
+    if len(topic_kws) < 3:
+        return True, topic_kws, set()
+    # Берём kb-abstract под каждый id ИЗ content — он полнее, чем то, что explorer
+    # пишет в append. Если abstract не найден, fallback на content как есть.
+    ids_in_content = extract_ids(content)
+    abstracts: list[str] = [content]
+    if ids_in_content:
+        kb_by_id = {a.get("id"): a for a in kb_mod.load() if a.get("kind") == "paper"}
+        for aid in ids_in_content:
+            atom = kb_by_id.get(aid)
+            if atom:
+                abstracts.append(f"{atom.get('title', '')} {atom.get('claim', '')}")
+    content_kws = keyword_set(" ".join(abstracts))
+    overlap = content_kws & topic_kws
+    return len(overlap) >= min_hits, topic_kws, overlap
+
+
+def _log_rejected(content: str, ids: set[str], topic_kws: set[str], overlap: set[str]) -> None:
+    """Пишет отклонённую заметку в research/rejected.jsonl для последующего анализа."""
+    from datetime import datetime
+    ensure_dir()
+    entry = {
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+        "ids": sorted(ids),
+        "overlap": sorted(overlap),
+        "topic_keywords_sample": sorted(topic_kws)[:20],
+        "content_preview": content[:300],
+    }
+    with REJECTED_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 @register_tool("hf_papers")
@@ -191,6 +245,18 @@ class AppendNotes(BaseTool):
                         "ВЕРИФИЦИРОВАННЫЙ [arxiv-id], затем повторно append_notes. "
                         "Либо перепиши без этих id, цитируя только известные: "
                         f"{sorted(known) or '(пока нет)'}.")
+        # Domain gate: если заметка содержит arxiv-id, проверяем что paper из
+        # нашего домена (plan.md topic). Reflection-заметки без id пропускаем.
+        # Ловит ComVo-style citation laundering ДО попадания в notes.md.
+        ids = extract_ids(content)
+        if CFG.get("strict_domain_gate", True) and ids:
+            passed, topic_kws, overlap = domain_gate(content)
+            if not passed and topic_kws:
+                _log_rejected(content, ids, topic_kws, overlap)
+                return (f"ОТКАЗ (domain gate): заметка с id {sorted(ids)} не относится к теме "
+                        f"плана. Пересечение с topic keywords: {sorted(overlap) or '∅'} "
+                        f"(нужно ≥2). Это paper из смежного домена — не лей в KB, возьми "
+                        "следующий результат поиска. Записано в rejected.jsonl.")
         with NOTES_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
         return f"notes.md +{len(content)} симв (всего {NOTES_PATH.stat().st_size} симв)"

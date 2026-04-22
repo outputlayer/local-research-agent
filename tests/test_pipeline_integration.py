@@ -20,6 +20,7 @@ def _patch_paths(monkeypatch, tmp_path):
         "SYNTHESIS_PATH": tmp_path / "synthesis.md",
         "LESSONS_PATH": tmp_path / "lessons.md",
         "QUERYLOG_PATH": tmp_path / "querylog.md",
+        "REJECTED_PATH": tmp_path / "rejected.jsonl",
         "METRICS_PATH": tmp_path / "metrics.json",
         "KB_PATH": tmp_path / "kb.jsonl",
     }
@@ -68,8 +69,9 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
             for _pid in ("2401.00001", "2401.00002"):
                 _kb.add(_kb.Atom(id=_pid, kind="paper", topic="test", claim="seed"))
             tools.AppendNotes().call(
-                {"content": "## test\n[2401.00001] fact A about transformers\n"
-                            "[2401.00002] fact B about attention\n"
+                {"content": "## [T1] обзорные архитектуры\n"
+                            "[2401.00001] обзорная работа про архитектуры transformers\n"
+                            "[2401.00002] анализ attention в обзорных архитектурах\n"
                             "[repo: foo/bar ★1200 Python] https://github.com/foo/bar\n"
                             "  модульный pipeline с plugin-архитектурой"})
             tools.AppendLessons().call({"content": "[iter 1] сработало: hf+gh; НЕ сработало: —; следующий: synth"})

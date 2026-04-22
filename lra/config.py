@@ -84,6 +84,9 @@ RUN_LOG_PATH = RESEARCH_DIR / "run.log"
 # Reflexion-память ГЛОБАЛЬНА — живёт между сессиями, не стирается при новом запросе
 LESSONS_PATH = RESEARCH_DIR / "lessons.md"
 QUERYLOG_PATH = RESEARCH_DIR / "querylog.md"
+# Лог отклонённых AppendNotes (domain gate) — не теряем evidence, просто не
+# льём в KB. Для отладки: какие papers explorer принёс из смежного домена.
+REJECTED_PATH = RESEARCH_DIR / "rejected.jsonl"
 
 # ── Freshness knobs ────────────────────────────────────────────────────────
 # Порог актуальности: GitHub — год, arxiv — два. Старые записи не игнорируем

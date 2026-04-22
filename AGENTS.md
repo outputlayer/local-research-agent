@@ -66,6 +66,7 @@ python -c "from lra.pipeline import resume_research; resume_research()"
 | Флаг | Default | Что делает |
 |---|---|---|
 | `notes_strict` | `True` | Pre-append verifier блокирует AppendNotes на неизвестных arxiv-id |
+| `strict_domain_gate` | `True` | AppendNotes блокирует paper из смежного домена (< 2 overlap с topic keywords из plan.md). Slow-start: если plan содержит < 3 специфичных kws, gate пропускает. Отклонённые → `research/rejected.jsonl` |
 | `specialized_critics` | `True` | Fact-critic + structure-critic вместо combined `CRITIC_PROMPT` |
 | `dynamic_initial_plan` | `True` | LLM-bootstrap topic-aware seeds перед Phase 1; fallback на статический 5-seed plan при любой ошибке парсинга/LLM |
 | `hitl` | `False` | Human-in-the-loop пауза после validator'а (REPL: `/hitl on`) |

@@ -18,6 +18,7 @@ research/run.log
 research/archive/
 research/kb.jsonl
 research/metrics.json
+research/rejected.jsonl
 
 # HF/MLX кэш + наш disk-cache для hf/gh CLI
 .cache/

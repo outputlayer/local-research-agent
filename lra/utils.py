@@ -147,6 +147,41 @@ def keyword_set(s: str) -> set[str]:
     return {w.lower() for w in re.findall(r"[A-Za-zА-Яа-я][A-Za-zА-Яа-я\-]{4,}", s)}
 
 
+# Generic-слова из plan.md, которые НЕ должны служить domain-якорем:
+# встречаются в любом научном abstract и дают false positive overlap.
+_TOPIC_GENERIC = frozenset({
+    "modern", "approach", "approaches", "survey", "review", "study", "studies",
+    "analysis", "research", "technique", "techniques", "method", "methods",
+    "system", "systems", "model", "models", "application", "applications",
+    "based", "using", "toward", "towards", "paper", "papers",
+    "plan", "focus", "todo", "done", "blocked", "progress", "digest",
+    "iter", "attempts", "evidence", "revision", "revisions",
+    "deep-dive", "trade-offs", "tradeoffs",
+    "современ", "современные", "подход", "подходы", "обзор", "анализ",
+    "метод", "методы", "система", "системы", "модель", "модели",
+    "статья", "работа", "работы", "исследование", "исследования",
+})
+
+
+def extract_topic_keywords(plan_text: str) -> set[str]:
+    """Ключевые доменные термины из plan.md (заголовок + [Tn]-задачи).
+
+    Используется domain-gate в AppendNotes: если abstract добавляемого paper не
+    пересекается с ЭТИМИ словами хотя бы на min_hits — paper из смежного домена,
+    в KB не льём. Семантика: 'из чего состоит наша тема' в терминах пользователя.
+
+    Нормализация: keyword_set (≥5 chars) минус STOPWORDS и _TOPIC_GENERIC.
+    """
+    if not plan_text:
+        return set()
+    # Первая строка (заголовок) + все строки с [Tn] — носители доменных терминов.
+    lines = [plan_text.split("\n", 1)[0]] + [
+        ln for ln in plan_text.splitlines() if re.search(r"\[T\d+\]", ln)
+    ]
+    kws = keyword_set(" ".join(lines))
+    return {w for w in kws if w not in STOPWORDS and w not in _TOPIC_GENERIC}
+
+
 def jaccard(a: set, b: set) -> float:
     if not a or not b:
         return 0.0

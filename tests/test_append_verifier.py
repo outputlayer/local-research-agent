@@ -7,9 +7,13 @@ def _isolated_research(tmp_path, monkeypatch):
     from lra import config, kb, memory, tools
     monkeypatch.setattr(config, "RESEARCH_DIR", tmp_path)
     monkeypatch.setattr(config, "NOTES_PATH", tmp_path / "notes.md")
+    monkeypatch.setattr(config, "PLAN_PATH", tmp_path / "plan.md")
+    monkeypatch.setattr(config, "REJECTED_PATH", tmp_path / "rejected.jsonl")
     monkeypatch.setattr(kb, "KB_PATH", tmp_path / "kb.jsonl")
     monkeypatch.setattr(memory, "NOTES_PATH", tmp_path / "notes.md")
     monkeypatch.setattr(tools, "NOTES_PATH", tmp_path / "notes.md")
+    monkeypatch.setattr(tools, "PLAN_PATH", tmp_path / "plan.md")
+    monkeypatch.setattr(tools, "REJECTED_PATH", tmp_path / "rejected.jsonl")
     return tmp_path
 
 
