@@ -21,7 +21,13 @@ from . import tools  # noqa: F401
 from .config import CFG, DRAFT_PATH, LESSONS_PATH, NOTES_PATH, PLAN_PATH, RESEARCH_DIR, SYNTHESIS_PATH
 from .logger import get_logger
 from .memory import reset_research
-from .metrics import CriticRound, IterationMetric, RunMetrics, count_critic_issues
+from .metrics import (
+    CriticRound,
+    IterationMetric,
+    RunMetrics,
+    count_critic_issues,
+    summarize_evidence_quality,
+)
 from .prompts import (
     COMPRESSOR_PROMPT,
     CRITIC_PROMPT,
@@ -778,6 +784,13 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
         # HITL pause-point: даём пользователю шанс ткнуть «перепиши про X» до финализации.
         _hitl_review(query, writer, writer_msgs, valid, invalid, suspicious)
         metrics.final_draft_chars = DRAFT_PATH.stat().st_size
+        quality = summarize_evidence_quality(
+            DRAFT_PATH.read_text(encoding="utf-8"),
+            NOTES_PATH.read_text(encoding="utf-8") if NOTES_PATH.exists() else "",
+            valid_ids=valid,
+        )
+        for key, value in quality.items():
+            setattr(metrics, key, value)
         print(f"\n📄 Итог: {DRAFT_PATH}\n" + "─" * 60)
         print(DRAFT_PATH.read_text(encoding='utf-8'))
         print("─" * 60)

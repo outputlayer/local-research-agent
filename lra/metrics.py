@@ -11,8 +11,18 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import RESEARCH_DIR
+from .utils import extract_ids
 
 METRICS_PATH = RESEARCH_DIR / "metrics.json"
+_REPO_CITATION_RE = re.compile(r"\[repo:\s*([^\]\n]+?)\]")
+_NUMERIC_RE = re.compile(r"\b\d+(?:\.\d+)?(?:x|%|k|m|b)?\b", re.IGNORECASE)
+_SPECULATION_MARKERS = (
+    "hypothetical",
+    "insufficient evidence",
+    "extrapolation",
+    "следующим логическим шагом",
+    "гипотетичес",
+)
 
 
 @dataclass
@@ -52,6 +62,12 @@ class RunMetrics:
     suspicious_citations: list[str] = field(default_factory=list)
     final_draft_chars: int = 0
     stopped_early_reason: str | None = None
+    unique_cited_paper_ids: int = 0
+    unique_cited_repos: int = 0
+    source_diversity: int = 0
+    numeric_evidence_count: int = 0
+    speculation_markers_count: int = 0
+    citation_coverage_ratio: float = 0.0
 
     @property
     def total_seconds(self) -> float:
@@ -68,6 +84,37 @@ class RunMetrics:
             encoding="utf-8",
         )
         return target
+
+
+def summarize_evidence_quality(draft_text: str, notes_text: str, *, valid_ids: int = 0) -> dict[str, int | float]:
+    """Считает простые quality metrics по draft+notes без внешних вызовов."""
+    cited_ids = extract_ids(draft_text or "")
+    cited_repos = {m.group(1).strip() for m in _REPO_CITATION_RE.finditer(draft_text or "")}
+
+    notes_blocks = [block for block in re.split(r"\n\s*\n", notes_text or "") if block.strip()]
+    numeric_evidence_count = 0
+    if cited_ids:
+        for block in notes_blocks:
+            if any(f"[{pid}]" in block for pid in cited_ids):
+                numeric_evidence_count += len(_NUMERIC_RE.findall(block))
+
+    draft_lower = (draft_text or "").lower()
+    speculation_markers_count = sum(draft_lower.count(marker) for marker in _SPECULATION_MARKERS)
+    unique_cited_paper_ids = len(cited_ids)
+    unique_cited_repos = len(cited_repos)
+    source_diversity = unique_cited_paper_ids + unique_cited_repos
+    citation_coverage_ratio = (
+        valid_ids / unique_cited_paper_ids if unique_cited_paper_ids else 0.0
+    )
+
+    return {
+        "unique_cited_paper_ids": unique_cited_paper_ids,
+        "unique_cited_repos": unique_cited_repos,
+        "source_diversity": source_diversity,
+        "numeric_evidence_count": numeric_evidence_count,
+        "speculation_markers_count": speculation_markers_count,
+        "citation_coverage_ratio": round(citation_coverage_ratio, 4),
+    }
 
 
 # ---- Парсинг критического ответа для точной конвергенции ----

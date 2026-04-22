@@ -149,6 +149,9 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
     # specialized critics = 2 раунда (fact + structure), оба APPROVED
     assert len(data["critic_rounds"]) == 2
     assert all(r["approved"] for r in data["critic_rounds"])
+    assert data["unique_cited_paper_ids"] >= 2
+    assert data["source_diversity"] >= 3
+    assert data["citation_coverage_ratio"] == 1.0
 
     memory_files = list((tmp_path / "memory").glob("*.md"))
     assert memory_files, "pipeline должен сохранять run-summary в research/memory/"

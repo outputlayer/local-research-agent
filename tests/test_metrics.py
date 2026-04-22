@@ -1,7 +1,13 @@
 """Тесты метрик итераций и парсера критики."""
 import json
 
-from lra.metrics import CriticRound, IterationMetric, RunMetrics, count_critic_issues
+from lra.metrics import (
+    CriticRound,
+    IterationMetric,
+    RunMetrics,
+    count_critic_issues,
+    summarize_evidence_quality,
+)
 
 
 def test_count_critic_issues_approved():
@@ -63,3 +69,25 @@ def test_run_metrics_total_seconds():
     m.started_at = 100.0
     m.finished_at = 105.5
     assert m.total_seconds == 5.5
+
+
+def test_summarize_evidence_quality_counts_sources_and_numbers():
+    draft = (
+        "# Report\n"
+        "Result [2401.00001] uses metric 95%.\n"
+        "Implementation [repo: foo/bar].\n"
+        "This is a hypothetical reference architecture.\n"
+    )
+    notes = (
+        "[2401.00001] dataset size 3B pulses and success 95%\n\n"
+        "[2402.00002] unrelated note without citation in draft\n"
+    )
+
+    quality = summarize_evidence_quality(draft, notes, valid_ids=1)
+
+    assert quality["unique_cited_paper_ids"] == 1
+    assert quality["unique_cited_repos"] == 1
+    assert quality["source_diversity"] == 2
+    assert quality["numeric_evidence_count"] >= 2
+    assert quality["speculation_markers_count"] >= 1
+    assert quality["citation_coverage_ratio"] == 1.0
