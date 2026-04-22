@@ -152,12 +152,15 @@ def _bootstrap_initial_plan(query: str) -> bool:
         if not parsed:
             log.info("bootstrap planner: невалидный JSON, остаёмся на статическом плане")
             return False
-        topic_type, seeds = parsed
-        plan = plan_mod.bootstrap_from_seeds(query, seeds, topic_type=topic_type)
+        topic_type, seeds, core_vocab = parsed
+        plan = plan_mod.bootstrap_from_seeds(query, seeds, topic_type=topic_type,
+                                             core_vocabulary=core_vocab)
         if plan is None:
             log.info("bootstrap planner: seeds не прошли валидацию (n=%d)", len(seeds))
             return False
-        print(f"   🧭 bootstrap plan: topic_type={topic_type}, задач={len(seeds)}")
+        vocab_n = len(plan.core_vocabulary)
+        print(f"   🧭 bootstrap plan: topic_type={topic_type}, задач={len(seeds)}, "
+              f"core_vocabulary={vocab_n}")
         return True
     except Exception as exc:
         log.warning("bootstrap planner упал (%s), остаёмся на статическом плане", exc)

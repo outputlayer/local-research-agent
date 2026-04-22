@@ -76,6 +76,11 @@ class Plan:
     tasks: list[Task] = field(default_factory=list)
     revisions: list[Revision] = field(default_factory=list)
     version: int = 1
+    # Core vocabulary: 8-15 specific domain terms from LLM bootstrap. Используется
+    # в двух местах: (а) domain_gate расширяет HEADER keywords этим списком —
+    # лечит слепоту gate'а когда заголовок слишком generic; (б) explorer может
+    # использовать как seed для конкретных arxiv-запросов вместо generic query.
+    core_vocabulary: list[str] = field(default_factory=list)
 
     # ── Навигация ─────────────────────────────────────────────────────────
     def get(self, task_id: str) -> Task | None:
@@ -241,6 +246,7 @@ def load(path: Path | None = None) -> Plan | None:
             current_focus_id=raw.get("current_focus_id"),
             tasks=tasks, revisions=revisions,
             version=raw.get("version", 1),
+            core_vocabulary=raw.get("core_vocabulary", []),
         )
     except Exception as e:
         log.warning("plan.json повреждён (%s) — игнорируем и пересоздадим", e)
@@ -254,6 +260,7 @@ def save(plan: Plan, path: Path | None = None) -> None:
         "root_goal": plan.root_goal,
         "current_focus_id": plan.current_focus_id,
         "version": plan.version,
+        "core_vocabulary": plan.core_vocabulary,
         "tasks": [asdict(t) for t in plan.tasks],
         "revisions": [asdict(r) for r in plan.revisions[-MAX_REVISIONS:]],
     }
@@ -280,13 +287,20 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
     lines = [
         f"# Plan: {plan.root_goal}",
         "",
+    ]
+    # Core vocabulary (если задан) — сразу после заголовка, чтобы domain_gate
+    # мог расширить HEADER-keywords специфичными доменными терминами из LLM.
+    if plan.core_vocabulary:
+        vocab_line = "**Core vocabulary:** " + ", ".join(plan.core_vocabulary)
+        lines.extend([vocab_line, ""])
+    lines.extend([
         focus_line,
         "",
         f"**Прогресс: {len(done)}/{total} done ({pct}%)** · "
         f"open={len(todo)} · in_progress={len(in_prog)} · blocked={len(blocked)} · "
         f"ревизий={len(plan.revisions)}",
         "",
-    ]
+    ])
 
     # Digest — из последних revisions
     last_rev = plan.revisions[-5:]
@@ -355,12 +369,15 @@ def reset(query: str, path: Path | None = None) -> Plan:
 
 
 def bootstrap_from_seeds(query: str, seeds: list[dict], topic_type: str = "mixed",
+                         core_vocabulary: list[str] | None = None,
                          path: Path | None = None) -> Plan | None:
     """Инициализирует plan.json из LLM-сгенерированных seed-задач.
 
     `seeds` — список dict c ключами `title` и `why` (опц). Должно быть 3-6 валидных
     элементов, иначе возвращаем None (caller упадёт на статический reset()).
     `topic_type` пишется в root_goal для трассируемости.
+    `core_vocabulary` — 8-15 доменных терминов от LLM, усиливают domain_gate
+    когда заголовок generic (аккуратная фильтрация: len≥4, не в STOPWORDS).
 
     Поведенческая гарантия: если функция возвращает Plan, файл plan.json уже записан
     и имеет ≥1 open-задачу + установленный focus. Если возвращает None — ни один файл
@@ -381,8 +398,27 @@ def bootstrap_from_seeds(query: str, seeds: list[dict], topic_type: str = "mixed
     if len(cleaned) < 3:
         return None
 
+    # Санитация core_vocabulary (граница "LLM → наш код"): строки 3-40 симв
+    # (3 чтобы поймать аббревиатуры: SGD, RAG, ECM, ESM), сброс дубликатов
+    # (case-insensitive), до 15 штук. Пустой список — ок (fallback на заголовок).
+    cv_clean: list[str] = []
+    seen_lower: set[str] = set()
+    for term in core_vocabulary or []:
+        if not isinstance(term, str):
+            continue
+        t = term.strip()
+        if not (3 <= len(t) <= 40):
+            continue
+        lo = t.lower()
+        if lo in seen_lower:
+            continue
+        seen_lower.add(lo)
+        cv_clean.append(t)
+        if len(cv_clean) >= 15:
+            break
+
     tt = topic_type if topic_type in ("engineering", "theoretical", "mixed") else "mixed"
-    plan = Plan(root_goal=f"[{tt}] {query}")
+    plan = Plan(root_goal=f"[{tt}] {query}", core_vocabulary=cv_clean)
     first = None
     for title, why in cleaned:
         t = plan.add_task(title, origin="bootstrap", iter_=0, why=why)
@@ -393,10 +429,11 @@ def bootstrap_from_seeds(query: str, seeds: list[dict], topic_type: str = "mixed
     return plan
 
 
-def parse_bootstrap_json(text: str) -> tuple[str, list[dict]] | None:
+def parse_bootstrap_json(text: str) -> tuple[str, list[dict], list[str]] | None:
     """Парсит вывод INITIAL_PLANNER_PROMPT. Толерантен к ```json-ограде и префиксам.
 
-    Возвращает (topic_type, seeds) или None если JSON невалиден/пуст.
+    Возвращает (topic_type, seeds, core_vocabulary) или None если JSON невалиден/пуст.
+    core_vocabulary опционален (может быть пустым для обратной совместимости).
     """
     if not text:
         return None
@@ -430,7 +467,12 @@ def parse_bootstrap_json(text: str) -> tuple[str, list[dict]] | None:
     tasks = data.get("tasks", [])
     if not isinstance(tasks, list):
         return None
-    return tt, tasks
+    raw_vocab = data.get("core_vocabulary", [])
+    vocab: list[str] = (
+        [v for v in raw_vocab if isinstance(v, str)]
+        if isinstance(raw_vocab, list) else []
+    )
+    return tt, tasks, vocab
 
 
 

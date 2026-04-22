@@ -11,10 +11,38 @@ def test_parse_strict_json():
         '{"topic_type":"theoretical","tasks":[{"title":"Sobolev inequalities in PAC-Bayes bounds","why":"core"}]}'
     )
     assert out is not None
-    tt, tasks = out
+    tt, tasks, vocab = out
     assert tt == "theoretical"
     assert len(tasks) == 1
     assert tasks[0]["title"].startswith("Sobolev")
+    assert vocab == []  # vocab отсутствует в JSON → пустой список
+
+
+def test_parse_with_core_vocabulary():
+    from lra.plan import parse_bootstrap_json
+    raw = (
+        '{"topic_type":"mixed",'
+        '"core_vocabulary":["jamming","ELINT","pulse deinterleaving","ESM"],'
+        '"tasks":[{"title":"LPI radar detection under noise","why":"core"}]}'
+    )
+    out = parse_bootstrap_json(raw)
+    assert out is not None
+    tt, tasks, vocab = out
+    assert tt == "mixed"
+    assert vocab == ["jamming", "ELINT", "pulse deinterleaving", "ESM"]
+
+
+def test_parse_core_vocabulary_ignores_non_strings():
+    from lra.plan import parse_bootstrap_json
+    raw = (
+        '{"topic_type":"mixed",'
+        '"core_vocabulary":["jamming",123,null,"ESM",{"x":1}],'
+        '"tasks":[]}'
+    )
+    out = parse_bootstrap_json(raw)
+    assert out is not None
+    _, _, vocab = out
+    assert vocab == ["jamming", "ESM"]
 
 
 def test_parse_wrapped_in_markdown_fence():
@@ -111,6 +139,89 @@ def test_bootstrap_normalizes_unknown_topic_type(_isolated_plan):
     p = bootstrap_from_seeds("q", seeds, topic_type="nonsense")
     assert p is not None
     assert "[mixed]" in load().root_goal  # fallback
+
+
+def test_bootstrap_sanitizes_core_vocabulary(_isolated_plan):
+    """len 4-40, dedupe case-insensitive, cap 15, non-strings отбрасываются."""
+    from lra.plan import bootstrap_from_seeds, load
+    seeds = [
+        {"title": "task one with enough chars", "why": "w"},
+        {"title": "task two with enough chars", "why": "w"},
+        {"title": "task three with enough chars", "why": "w"},
+    ]
+    vocab = [
+        "jamming",        # ok
+        "x",              # too short (1 char)
+        "a" * 50,         # too long
+        "ELINT",          # ok
+        "elint",          # dup (case-insensitive)
+        "   ESM   ",      # ok (strip, 3 chars — порог 3)
+        123,              # not a string
+        "",               # empty
+    ] + [f"term{i}abcd" for i in range(20)]  # 20 → cap at 15
+    p = bootstrap_from_seeds("q", seeds, topic_type="mixed", core_vocabulary=vocab)
+    assert p is not None
+    loaded = load()
+    assert loaded.core_vocabulary[0] == "jamming"
+    assert "ELINT" in loaded.core_vocabulary
+    assert "ESM" in loaded.core_vocabulary
+    # никаких duplicates
+    lowers = [t.lower() for t in loaded.core_vocabulary]
+    assert len(lowers) == len(set(lowers))
+    # cap 15
+    assert len(loaded.core_vocabulary) <= 15
+
+
+def test_render_md_emits_core_vocabulary_line(_isolated_plan, tmp_path):
+    from lra.plan import bootstrap_from_seeds
+    seeds = [
+        {"title": "task one with enough chars", "why": "w"},
+        {"title": "task two with enough chars", "why": "w"},
+        {"title": "task three with enough chars", "why": "w"},
+    ]
+    bootstrap_from_seeds(
+        "EW topic", seeds, topic_type="mixed",
+        core_vocabulary=["jamming", "ELINT", "ESM"],
+    )
+    md = (tmp_path / "plan.md").read_text()
+    assert "**Core vocabulary:** jamming, ELINT, ESM" in md
+    # строка идёт ПОСЛЕ заголовка, ДО focus-line
+    header_pos = md.index("# Plan:")
+    vocab_pos = md.index("**Core vocabulary:**")
+    focus_pos = md.index("[FOCUS]")
+    assert header_pos < vocab_pos < focus_pos
+
+
+def test_render_md_no_vocab_line_when_empty(_isolated_plan, tmp_path):
+    from lra.plan import bootstrap_from_seeds
+    seeds = [
+        {"title": "task one with enough chars", "why": "w"},
+        {"title": "task two with enough chars", "why": "w"},
+        {"title": "task three with enough chars", "why": "w"},
+    ]
+    bootstrap_from_seeds("topic", seeds, topic_type="mixed")
+    md = (tmp_path / "plan.md").read_text()
+    assert "**Core vocabulary:**" not in md
+
+
+def test_plan_sections_merges_core_vocabulary_into_header():
+    """utils._plan_sections должен тянуть vocab-line в HEADER, чтобы gate видел."""
+    from lra.utils import extract_topic_keywords_tiered
+    plan_md = (
+        "# Plan: generic topic title\n"
+        "\n"
+        "**Core vocabulary:** jamming, ELINT, pulse deinterleaving\n"
+        "\n"
+        "[FOCUS] ...\n"
+        "\n"
+        "## [TODO]\n"
+        "- [T1] task one\n"
+    )
+    header_kws, _ = extract_topic_keywords_tiered(plan_md)
+    # vocab-термины попали в header (а значит в header_kws)
+    assert "jamming" in header_kws
+    assert "elint" in header_kws
+    assert "deinterleaving" in header_kws
 
 
 # ── integration: _bootstrap_initial_plan (pipeline hook) ────────────────────

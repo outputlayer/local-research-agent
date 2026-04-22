@@ -173,14 +173,22 @@ _TOPIC_GENERIC = frozenset({
 def _plan_sections(plan_text: str) -> tuple[str, str]:
     """Разбивает plan.md на (header, seeds).
 
-    header = первая строка (# Plan: ...), это и есть актуальный topic.
+    header = первая строка (# Plan: ...) + строка `**Core vocabulary:** ...`,
+             если LLM-bootstrap её сгенерил. Это ядро темы.
     seeds  = все строки с [Tn] — часто drift'ят и содержат specific jargon,
              но сами по себе слабый якорь (см. canyons / challenges).
     """
     if not plan_text:
         return "", ""
     lines = plan_text.splitlines()
-    header = lines[0] if lines else ""
+    header_parts: list[str] = []
+    if lines:
+        header_parts.append(lines[0])
+    for ln in lines[1:10]:  # vocab-line рендерится сразу после header
+        if ln.lstrip().lower().startswith("**core vocabulary:"):
+            header_parts.append(ln)
+            break
+    header = "\n".join(header_parts)
     seeds = "\n".join(ln for ln in lines if re.search(r"\[T\d+\]", ln))
     return header, seeds
 

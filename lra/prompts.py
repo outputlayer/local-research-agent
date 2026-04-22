@@ -319,11 +319,28 @@ INITIAL_PLANNER_PROMPT = (
     "есть и теория, и реализации).\n\n"
     "Формат выхода:\n"
     '{"topic_type": "engineering|theoretical|mixed",\n'
+    ' "core_vocabulary": ["<8-15 узких доменных терминов>"],\n'
     ' "tasks": [\n'
     '   {"title": "<конкретная под-задача, 40-90 символов>",\n'
     '    "why": "<1 строка обоснование зачем эта ветка>"},\n'
     '   ...\n'
     " ]}\n\n"
+    "core_vocabulary — это САМЫЕ УЗКИЕ специфичные термины домена, которые должны "
+    "встречаться в релевантных статьях. НЕ generic слова (modern, approach, system, "
+    "analysis), а конкретные аббревиатуры, имена методов, технические сущности.\n"
+    "Примеры хороших core_vocabulary:\n"
+    "  • Electronic warfare: [\"jamming\", \"ELINT\", \"SIGINT\", \"ESM\", \"ECM\", "
+    "\"LPI radar\", \"pulse deinterleaving\", \"radar emitter\", \"anti-jamming\", "
+    "\"cognitive radar\", \"spectrum sensing\"]\n"
+    "  • Diffusion models: [\"DDPM\", \"score matching\", \"reverse SDE\", "
+    "\"classifier-free guidance\", \"latent diffusion\", \"noise schedule\", "
+    "\"DDIM\", \"flow matching\"]\n"
+    "  • RAG pipelines: [\"retrieval-augmented\", \"dense retriever\", \"BM25\", "
+    "\"reranker\", \"chunking\", \"embedding model\", \"ColBERT\", \"hybrid search\"]\n"
+    "Эти термины будут использоваться как (а) domain gate — статьи БЕЗ минимум 2-х "
+    "из этих слов отсеиваются; (б) seed-запросы для arxiv-поиска. Если список "
+    "слабый (generic слова), gate не будет работать — статьи из смежных доменов "
+    "просочатся в отчёт.\n\n"
     "ПРАВИЛА подбора задач:\n"
     "• НЕ используй шаблон «{query}: обзорные статьи» — это бесполезно. Вместо этого "
     "называй КОНКРЕТНЫЕ под-темы/методы/авторов, которые нужно копать.\n"
@@ -339,7 +356,9 @@ INITIAL_PLANNER_PROMPT = (
     "• 4-6 задач, не больше. Первая задача = самая фундаментальная "
     "(её поставят в [FOCUS]).\n"
     "• Если тема слишком общая и ты не можешь придумать специфичные ветки — верни "
-    '{"topic_type": "mixed", "tasks": []} и мы упадём на статический seed.\n\n'
+    '{"topic_type": "mixed", "core_vocabulary": [], "tasks": []} '
+    "и мы упадём на статический seed.\n\n"
     "ВЫВОД: только JSON, ничего кроме. Никаких ```json оград, никаких комментариев."
 )
+
 
