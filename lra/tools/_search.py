@@ -86,9 +86,10 @@ class HfPapers(BaseTool):
             pid = paper.get("id", "")
             lines.append(f"[{pid}] {title}\n  {authors} · {date}\n  https://hf.co/papers/{pid}\n  {summary}")
             if pid:
-                passed, reason = _helpers.gate_paper_for_kb(pid, title, summary)
+                passed, reason, o_h, header_kws = _helpers.gate_paper_for_kb(pid, title, summary)
                 if not passed:
                     auto_filtered += 1
+                    _helpers._log_kb_rejected(pid, title, reason, o_h, header_kws, source="hf_papers")
                     _helpers.log.debug("kb auto-save skipped %s (%s)", pid, reason)
                     continue
                 try:
@@ -183,9 +184,10 @@ class ArxivSearch(BaseTool):
                 f"[{pid}] {title}\n  {authors} · {date}\n  https://arxiv.org/abs/{pid}\n  {summary}"
             )
             if pid:
-                passed, reason = _helpers.gate_paper_for_kb(pid, title, summary)
+                passed, reason, o_h, header_kws = _helpers.gate_paper_for_kb(pid, title, summary)
                 if not passed:
                     auto_filtered += 1
+                    _helpers._log_kb_rejected(pid, title, reason, o_h, header_kws, source="arxiv_search")
                     _helpers.log.debug("kb auto-save skipped %s (%s)", pid, reason)
                     continue
                 try:

@@ -64,6 +64,7 @@ from ._artifacts import (
 # Helpers + logger
 from ._helpers import (
     _fetch_text,
+    _log_kb_rejected,
     _log_rejected,
     _parse_arxiv_feed,
     _wrap_with_logging,
@@ -83,7 +84,8 @@ __all__ = [
     "ARXIV_RECENT_DAYS", "GITHUB_RECENT_DAYS", "MAX_GITHUB_QUERY_WORDS",
     # helpers
     "verify_ids_against_kb", "domain_gate", "gate_paper_for_kb",
-    "_log_rejected", "_fetch_text", "_parse_arxiv_feed", "log",
+    "_log_rejected", "_log_kb_rejected",
+    "_fetch_text", "_parse_arxiv_feed", "log",
     "_wrap_with_logging",
     # search
     "HfPapers", "ArxivSearch", "GithubSearch",

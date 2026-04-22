@@ -136,7 +136,7 @@ def test_gate_paper_for_kb_blocks_comvo(_isolated):
     """hf_papers kb auto-save gate: off-topic paper не должен осесть в kb.jsonl."""
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
-    passed, reason = tools.gate_paper_for_kb(
+    passed, reason, _o, _h = tools.gate_paper_for_kb(
         "2603.11589",
         "ComVo complex-valued neural vocoder",
         "complex-valued neural vocoder for waveform generation from mel-spectrogram "
@@ -149,7 +149,7 @@ def test_gate_paper_for_kb_blocks_comvo(_isolated):
 def test_gate_paper_for_kb_passes_ew_paper(_isolated):
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
-    passed, reason = tools.gate_paper_for_kb(
+    passed, reason, _o, _h = tools.gate_paper_for_kb(
         "2512.05753",
         "FARDA: Fast Anti-Jamming Radar Deployment via Deep Reinforcement Learning",
         "end-to-end DRL for electronic warfare radar deployment, jamming resistance, "
@@ -161,5 +161,42 @@ def test_gate_paper_for_kb_passes_ew_paper(_isolated):
 
 def test_gate_paper_for_kb_bypass_without_plan(_isolated):
     from lra import tools
-    passed, reason = tools.gate_paper_for_kb("2401.00001", "any", "any content")
+    passed, reason, _o, _h = tools.gate_paper_for_kb("2401.00001", "any", "any content")
     assert passed is True
+
+
+_NARROW_PLAN = "# Plan: electronic warfare and ELINT\n"  # header = {electronic, warfare, elint, intelligence} = 4 слова
+
+
+def test_gate_paper_for_kb_adaptive_threshold_narrow_header(_isolated):
+    """Узкий header (≤4 core-kws) → достаточно 1 hit, paper не режется «weak_overlap»."""
+    from lra import tools
+    (_isolated / "plan.md").write_text(_NARROW_PLAN, encoding="utf-8")
+    # cognitive radar jamming — 1 hit (нет прямого 'electronic'/'warfare', но title упомянёт)
+    passed, reason, o_h, h = tools.gate_paper_for_kb(
+        "2501.11111",
+        "Cognitive radar jamming detection via deep learning",
+        "electronic countermeasures in contested spectrum using CNN classifier",
+    )
+    assert passed is True
+    assert reason == "passed"
+
+
+def test_gate_paper_for_kb_logs_rejection_to_jsonl(_isolated):
+    """Skip в gate_paper_for_kb должен писаться в rejected.jsonl с reason kb_autosave:*."""
+    import json
+
+    from lra import tools
+    (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
+    passed, reason, o_h, h = tools.gate_paper_for_kb(
+        "2603.11589",
+        "ComVo vocoder",
+        "mel-spectrogram waveform generation",
+    )
+    assert passed is False
+    tools._log_kb_rejected("2603.11589", "ComVo vocoder", reason, o_h, h, source="hf_papers")
+    lines = (_isolated / "rejected.jsonl").read_text(encoding="utf-8").strip().splitlines()
+    entry = json.loads(lines[-1])
+    assert entry["reason"] == "kb_autosave:no_core_hit"
+    assert entry["paper_id"] == "2603.11589"
+    assert entry["source"] == "hf_papers"

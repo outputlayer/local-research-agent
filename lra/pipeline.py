@@ -166,15 +166,21 @@ def _bootstrap_initial_plan(query: str) -> bool:
                     break
         parsed = plan_mod.parse_bootstrap_json(raw)
         if not parsed:
-            log.info("bootstrap planner: невалидный JSON, остаёмся на статическом плане")
+            log.warning("bootstrap planner: невалидный JSON от LLM, остаёмся на статическом плане "
+                        "— domain_gate будет работать только по 4 словам из заголовка темы. "
+                        "Сырой ответ LLM (первые 400 симв): %s", (raw or "(пусто)")[:400])
+            print("   ⚠️  bootstrap plan: LLM вернул невалидный JSON — core_vocabulary пуст, "
+                  "gate работает по header (см. лог)")
             return False
         topic_type, seeds, core_vocab = parsed
         plan = plan_mod.bootstrap_from_seeds(query, seeds, topic_type=topic_type,
                                              core_vocabulary=core_vocab)
         if plan is None:
-            log.info("bootstrap planner: seeds не прошли валидацию (n=%d)", len(seeds))
+            log.warning("bootstrap planner: seeds не прошли валидацию (n=%d)", len(seeds))
             return False
         vocab_n = len(plan.core_vocabulary)
+        if vocab_n == 0:
+            log.warning("bootstrap planner: core_vocabulary пуст — gate ослаблен до header-only")
         print(f"   🧭 bootstrap plan: topic_type={topic_type}, задач={len(seeds)}, "
               f"core_vocabulary={vocab_n}")
         return True
