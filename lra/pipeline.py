@@ -145,15 +145,57 @@ def _rotate_focus_fallback(query: str) -> bool:
 def _bootstrap_initial_plan(query: str) -> bool:
     """Один LLM-вызов BOOTSTRAP-планера → переписываем plan.json специфичными задачами.
 
-    Тихо degrade'ится в статический план (уже записанный reset_research) при:
-    - ошибке LLM / таймауте,
-    - невалидном JSON,
-    - недостаточном количестве задач (<3).
+    Стратегия восстановления при ошибках (в порядке):
+    1. Полный INITIAL_PLANNER_PROMPT (1 попытка).
+    2. Упрощённый retry-prompt: только JSON со списком терминов и заголовков (1 попытка).
+    3. Static-vocabulary fallback: keyword_set от query → domain gate работает
+       по специфичным словам из самой темы вместо ослабления до header-only.
 
-    Возвращает True если bootstrap успешно применён, False если оставлен статический план.
+    Возвращает True если bootstrap успешно применён (включая fallback на static vocab),
+    False если оставлен полностью статический план без vocabulary.
     """
+    # ── Попытка 1: полный prompt ─────────────────────────────────
+    parsed = _try_bootstrap_call(query, INITIAL_PLANNER_PROMPT, label="bootstrap")
+    if parsed:
+        return _apply_bootstrap_parsed(query, parsed)
+
+    # ── Попытка 2: упрощённый retry ──────────────────────────────
+    retry_prompt = (
+        "Верни СТРОГО один JSON-объект (без markdown-ограды, без пояснений) формата:\n"
+        '{"topic_type": "engineering|theoretical|mixed",\n'
+        ' "core_vocabulary": ["<8-12 узких доменных терминов>"],\n'
+        ' "tasks": [{"title": "<40-90 симв>", "why": "<1 строка>"}, ...]}\n'
+        "Минимум 4 задачи в tasks. Никакого текста вне JSON."
+    )
+    parsed = _try_bootstrap_call(query, retry_prompt, label="bootstrap-retry")
+    if parsed:
+        return _apply_bootstrap_parsed(query, parsed)
+
+    # ── Fallback 3: static vocabulary из query ───────────────────
+    from .utils import derive_static_vocabulary
+    static_vocab = derive_static_vocabulary(query)
+    if static_vocab:
+        # Reset уже создал статический план. Просто дописываем core_vocabulary в plan.
+        plan = plan_mod.load()
+        if plan is not None:
+            plan.core_vocabulary = static_vocab
+            plan_mod.save(plan)
+            log.warning("bootstrap planner failed twice; static-vocab fallback применён "
+                        "(%d терминов из query): %s", len(static_vocab), ", ".join(static_vocab))
+            print(f"   🛟 bootstrap fallback: static vocabulary из query "
+                  f"({len(static_vocab)} терминов) — gate работает но без LLM-уточнений")
+            return True
+    log.warning("bootstrap planner: все стратегии провалились, plan без core_vocabulary "
+                "(gate fail-closed заблокирует все append'ы пока CFG['allow_no_vocab']=True)")
+    print("   ⚠️  bootstrap plan: статический план без vocabulary — agent НЕ сможет писать "
+          "в notes пока тебе не разрешишь CFG['allow_no_vocab']=True")
+    return False
+
+
+def _try_bootstrap_call(query: str, prompt: str, *, label: str) -> tuple | None:
+    """Один вызов LLM с заданным prompt'ом. Возвращает parse_bootstrap_json результат или None."""
     try:
-        planner = build_bot(INITIAL_PLANNER_PROMPT, [], max_tokens=1024)
+        planner = build_bot(prompt, [], max_tokens=1024)
         msgs = [{"role": "user", "content": f"Тема: {query}"}]
         resp = _run_agent(planner, msgs, "🧭")
         raw = ""
@@ -165,27 +207,36 @@ def _bootstrap_initial_plan(query: str) -> bool:
                     break
         parsed = plan_mod.parse_bootstrap_json(raw)
         if not parsed:
-            log.warning("bootstrap planner: невалидный JSON от LLM, остаёмся на статическом плане "
-                        "— domain_gate будет работать только по 4 словам из заголовка темы. "
-                        "Сырой ответ LLM (первые 400 симв): %s", (raw or "(пусто)")[:400])
-            print("   ⚠️  bootstrap plan: LLM вернул невалидный JSON — core_vocabulary пуст, "
-                  "gate работает по header (см. лог)")
-            return False
-        topic_type, seeds, core_vocab = parsed
-        plan = plan_mod.bootstrap_from_seeds(query, seeds, topic_type=topic_type,
-                                             core_vocabulary=core_vocab)
-        if plan is None:
-            log.warning("bootstrap planner: seeds не прошли валидацию (n=%d)", len(seeds))
-            return False
-        vocab_n = len(plan.core_vocabulary)
-        if vocab_n == 0:
-            log.warning("bootstrap planner: core_vocabulary пуст — gate ослаблен до header-only")
-        print(f"   🧭 bootstrap plan: topic_type={topic_type}, задач={len(seeds)}, "
-              f"core_vocabulary={vocab_n}")
-        return True
+            log.warning("%s: невалидный JSON. Сырой ответ (первые 300 симв): %s",
+                        label, (raw or "(пусто)")[:300])
+        return parsed
     except Exception as exc:
-        log.warning("bootstrap planner упал (%s), остаёмся на статическом плане", exc)
+        log.warning("%s упал (%s)", label, exc)
+        return None
+
+
+def _apply_bootstrap_parsed(query: str, parsed: tuple) -> bool:
+    """Применяет распарсенный bootstrap result к plan.json. True если успех."""
+    topic_type, seeds, core_vocab = parsed
+    plan = plan_mod.bootstrap_from_seeds(query, seeds, topic_type=topic_type,
+                                         core_vocabulary=core_vocab)
+    if plan is None:
+        log.warning("bootstrap planner: seeds не прошли валидацию (n=%d)", len(seeds))
         return False
+    vocab_n = len(plan.core_vocabulary)
+    if vocab_n == 0:
+        # LLM вернул валидный JSON но с пустым vocabulary — пробуем static fallback
+        from .utils import derive_static_vocabulary
+        static_vocab = derive_static_vocabulary(query)
+        if static_vocab:
+            plan.core_vocabulary = static_vocab
+            plan_mod.save(plan)
+            vocab_n = len(static_vocab)
+            log.warning("bootstrap planner: LLM vocab пуст, static-vocab из query применён "
+                        "(%d терминов)", vocab_n)
+    print(f"   🧭 bootstrap plan: topic_type={topic_type}, задач={len(seeds)}, "
+          f"core_vocabulary={vocab_n}")
+    return True
 
 
 def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):

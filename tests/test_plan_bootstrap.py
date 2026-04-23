@@ -271,33 +271,59 @@ def test_pipeline_bootstrap_applies_valid_json(_isolated_all, monkeypatch):
 
 
 def test_pipeline_bootstrap_falls_back_on_garbage(_isolated_all, monkeypatch):
+    """LLM возвращает мусор → retry тоже мусор → static-vocab fallback из query.
+
+    После добавления retry+static fallback (P2) функция возвращает True если
+    из query удалось извлечь хоть один доменный термин (≥4 симв). Plan остаётся
+    статическим, но core_vocabulary заполняется ключевыми словами из самого query.
+    """
     from lra import pipeline
     from lra import plan as plan_mod
-    plan_mod.reset("topic")  # static baseline
+    plan_mod.reset("retrieval augmented generation pipelines")  # multi-word query
     static_titles = {t.title for t in plan_mod.load().tasks}
 
     monkeypatch.setattr(pipeline, "_run_agent", _fake_run_agent("lol not json"))
     monkeypatch.setattr(pipeline, "build_bot", lambda *a, **kw: object())
 
-    ok = pipeline._bootstrap_initial_plan("topic")
-    assert ok is False
-    # Статический план не тронут
-    assert {t.title for t in plan_mod.load().tasks} == static_titles
+    ok = pipeline._bootstrap_initial_plan("retrieval augmented generation pipelines")
+    assert ok is True  # static-vocab fallback применился
+    loaded = plan_mod.load()
+    # Статические задачи не тронуты
+    assert {t.title for t in loaded.tasks} == static_titles
+    # Но vocabulary теперь заполнен из query
+    assert len(loaded.core_vocabulary) >= 2
+    assert "retrieval" in loaded.core_vocabulary or "generation" in loaded.core_vocabulary
 
 
 def test_pipeline_bootstrap_survives_llm_exception(_isolated_all, monkeypatch):
+    """LLM падает с исключением → retry тоже падает → static-vocab fallback срабатывает."""
     from lra import pipeline
     from lra import plan as plan_mod
-    plan_mod.reset("topic")
+    plan_mod.reset("electronic warfare jamming detection")
 
     def _boom(*a, **kw):
         raise RuntimeError("mlx crashed")
     monkeypatch.setattr(pipeline, "build_bot", _boom)
 
-    ok = pipeline._bootstrap_initial_plan("topic")
+    ok = pipeline._bootstrap_initial_plan("electronic warfare jamming detection")
+    assert ok is True  # static fallback
+    loaded = plan_mod.load()
+    assert loaded is not None
+    assert len(loaded.core_vocabulary) >= 2
+
+
+def test_pipeline_bootstrap_no_fallback_for_empty_query(_isolated_all, monkeypatch):
+    """Если query слишком короткий чтобы извлечь vocab (1-3 символа), fallback пуст → False."""
+    from lra import pipeline
+    from lra import plan as plan_mod
+    plan_mod.reset("xx")
+
+    monkeypatch.setattr(pipeline, "_run_agent", _fake_run_agent("garbage"))
+    monkeypatch.setattr(pipeline, "build_bot", lambda *a, **kw: object())
+
+    ok = pipeline._bootstrap_initial_plan("xx")
     assert ok is False
-    # Статический план всё ещё есть
-    assert plan_mod.load() is not None
+    assert plan_mod.load() is not None  # статический план уцелел
 
 
 def test_cfg_flag_default_on():

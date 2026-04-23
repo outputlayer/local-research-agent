@@ -322,3 +322,42 @@ def jaccard(a: set, b: set) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+def derive_static_vocabulary(query: str, abstracts: list[str] | None = None,
+                             max_terms: int = 12) -> list[str]:
+    """Извлекает домен-vocabulary из query (и опционально топ-абстрактов).
+
+    Fallback для случая когда LLM-bootstrap упал и core_vocabulary пустой.
+    Стратегия: keyword_set из query + abstracts, отфильтровать STOPWORDS/_TOPIC_GENERIC,
+    отсортировать по частоте вхождений в комбинированном тексте, взять топ-N.
+
+    Это резервный план — терминов будет меньше и они будут менее точные чем
+    от LLM (нет уровня абстракции, нет аббревиатур которые LLM знает по контексту),
+    но domain gate перестанет работать только по 4 словам заголовка.
+
+    Параметры:
+        query: исходный запрос пользователя
+        abstracts: опциональный список abstract'ов из первых hf_papers/arxiv hit'ов
+                   (используется для расширения vocabulary терминами из реальных статей)
+        max_terms: верхняя граница vocab-size (соответствует LLM выдаче 8-15)
+
+    Возвращает: список терминов (нижний регистр, дедуплицированы) длиной до max_terms.
+    """
+    text = query
+    if abstracts:
+        text = text + " " + " ".join(abstracts)
+    raw = keyword_set(text)
+    # Отфильтровать generic + stopwords + годы
+    candidates = [w for w in raw
+                  if w not in STOPWORDS
+                  and w not in _TOPIC_GENERIC
+                  and not re.fullmatch(r"20\d{2}", w)
+                  and len(w) >= 4]
+    if not candidates:
+        return []
+    # Сортировка по частоте вхождений в text (чем чаще — тем характернее для домена).
+    lower = text.lower()
+    scored = [(w, lower.count(w)) for w in candidates]
+    scored.sort(key=lambda p: (-p[1], p[0]))
+    return [w for w, _ in scored[:max_terms]]
