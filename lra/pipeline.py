@@ -256,7 +256,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         _bootstrap_initial_plan(query)
 
     explorer = build_bot(EXPLORER_PROMPT,
-                         ["hf_papers", "arxiv_search", "github_search",
+                         ["hf_papers", "arxiv_search", "semantic_scholar_search", "github_search",
                           "read_plan", "read_notes", "read_notes_focused", "append_notes",
                           "read_lessons", "append_lessons", "read_querylog",
                           "kb_add", "kb_search",

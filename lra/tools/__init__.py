@@ -76,7 +76,7 @@ from ._helpers import (
 )
 
 # Search tools
-from ._search import ArxivSearch, GithubSearch, HfPapers
+from ._search import ArxivSearch, GithubSearch, HfPapers, SemanticScholarSearch
 
 __all__ = [
     # paths
@@ -89,7 +89,7 @@ __all__ = [
     "_fetch_text", "_parse_arxiv_feed", "log",
     "_wrap_with_logging",
     # search
-    "HfPapers", "ArxivSearch", "GithubSearch",
+    "HfPapers", "ArxivSearch", "SemanticScholarSearch", "GithubSearch",
     # artifacts
     "CompactNotes", "WriteDraft", "AppendDraft", "ReadDraft",
     "AppendNotes", "ReadNotes", "ReadNotesFocused",

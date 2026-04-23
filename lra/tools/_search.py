@@ -232,6 +232,122 @@ class ArxivSearch(BaseTool):
         return "\n\n".join(lines) + footer + stale_note
 
 
+@register_tool("semantic_scholar_search")
+class SemanticScholarSearch(BaseTool):
+    description = (
+        "Поиск через Semantic Scholar Graph API (api.semanticscholar.org). "
+        "Альтернатива arxiv_search для cross-disciplinary тем (когда нужны не только "
+        "arxiv-препринты, но и журнальные публикации, ACL/NeurIPS/ICML и т.п.). "
+        "Возвращает paperId, title, year, authors, abstract; если у статьи есть "
+        "arxiv-id (через externalIds.ArXiv), он используется как первичный ID и попадёт "
+        "в kb. Без arxiv-id статьи показываются, но НЕ автосохраняются в kb (verifier "
+        "требует arxiv-id для AppendNotes).\n"
+        "Опционально: year='2023-2025' (фильтр по годам), fields_of_study=['Computer Science']."
+    )
+    parameters = [
+        {"name": "query", "type": "string", "description": "Запрос (свободный текст)", "required": True},
+        {"name": "limit", "type": "integer", "description": "1-10 (по умолчанию 5)", "required": False},
+        {"name": "year", "type": "string",
+         "description": "Опц. диапазон лет '2023-2025' или одиночный год '2024'", "required": False},
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        p = parse_args(params)
+        query = (p.get("query") or "").strip()
+        if not query:
+            return "ошибка: query обязателен"
+        limit = max(1, min(int(p.get("limit", 5)), 10))
+        year_raw = (p.get("year") or "").strip()
+        # Sanitize year: только цифры и одно тире
+        year = ""
+        if year_raw and re.fullmatch(r"20\d{2}(?:-20\d{2})?", year_raw):
+            year = year_raw
+
+        dedup_key = f"s2: {query}" + (f" [year={year}]" if year else "")
+        if normalize_query(dedup_key) in seen_queries():
+            return (f"ОТКАЗ: запрос '{query}' уже выполнялся через semantic_scholar_search. "
+                    "Переформулируй или читай read_notes/kb_search.")
+        fuzzy = is_similar_to_seen(dedup_key)
+        if fuzzy and fuzzy != dedup_key:
+            return (f"ОТКАЗ: semantic_scholar_search '{query}' похож на '{fuzzy}'. "
+                    "Смени термины.")
+        log_query(dedup_key)
+
+        qs: dict[str, str | int] = {
+            "query": query,
+            "limit": limit,
+            "fields": "title,abstract,year,authors,externalIds",
+        }
+        if year:
+            qs["year"] = year
+        url = "https://api.semanticscholar.org/graph/v1/paper/search?" + urlencode(qs)
+        try:
+            raw = _helpers._fetch_text(url, timeout=20)
+        except TimeoutError:
+            return "таймаут поиска semantic_scholar_search"
+        except Exception as exc:
+            return f"ошибка semantic_scholar_search: {str(exc)[:300]}"
+
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return f"невалидный JSON от Semantic Scholar: {raw[:300]}"
+        items = payload.get("data") or []
+        if not items:
+            return f"нет результатов semantic_scholar_search: {query}"
+
+        lines: list[str] = []
+        auto_saved = 0
+        auto_filtered = 0
+        no_arxiv = 0
+        for it in items[:limit]:
+            ext = it.get("externalIds") or {}
+            arx = (ext.get("ArXiv") or "").strip()
+            paper_id = it.get("paperId") or ""
+            title = (it.get("title") or "").strip()
+            abstract = (it.get("abstract") or "").strip()
+            year_p = it.get("year") or ""
+            authors = ", ".join(
+                (a.get("name") or "").strip() for a in (it.get("authors") or [])[:4] if a
+            )
+            display_id = arx or f"s2:{paper_id}"
+            url_paper = f"https://arxiv.org/abs/{arx}" if arx else \
+                        f"https://www.semanticscholar.org/paper/{paper_id}"
+            lines.append(
+                f"[{display_id}] {title}\n  {authors} · {year_p}\n  {url_paper}\n"
+                f"  {abstract[:800]}"
+            )
+            if not arx:
+                no_arxiv += 1
+                continue
+            passed, reason, o_h, header_kws = _helpers.gate_paper_for_kb(arx, title, abstract)
+            if not passed:
+                auto_filtered += 1
+                _helpers._log_kb_rejected(arx, title, reason, o_h, header_kws,
+                                          source="semantic_scholar_search")
+                continue
+            try:
+                kb_mod.add(kb_mod.Atom(
+                    id=arx, kind="paper", topic=query,
+                    title=title[:200], authors=authors[:200],
+                    url=f"https://arxiv.org/abs/{arx}",
+                    claim=abstract[:400],
+                ))
+                auto_saved += 1
+            except Exception as e:
+                _helpers.log.debug("kb auto-save s2 paper failed %s: %s", arx, e)
+
+        footer_parts = []
+        if auto_saved:
+            footer_parts.append(f"📥 авто-сохранено в kb: {auto_saved}")
+        if auto_filtered:
+            footer_parts.append(f"🚫 отфильтровано domain gate: {auto_filtered}")
+        if no_arxiv:
+            footer_parts.append(f"⚠️ без arxiv-id (не сохранены): {no_arxiv}")
+        footer = f"\n\n({', '.join(footer_parts)})" if footer_parts else ""
+        return "\n\n".join(lines) + footer
+
+
 @register_tool("github_search")
 class GithubSearch(BaseTool):
     description = (
