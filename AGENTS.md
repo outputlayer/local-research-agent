@@ -70,6 +70,7 @@ python -c "from lra.pipeline import resume_research; resume_research()"
 | `specialized_critics` | `True` | Fact-critic + structure-critic вместо combined `CRITIC_PROMPT` |
 | `dynamic_initial_plan` | `True` | LLM-bootstrap topic-aware seeds перед Phase 1; fallback на статический 5-seed plan при любой ошибке парсинга/LLM |
 | `hitl` | `False` | Human-in-the-loop пауза после validator'а (REPL: `/hitl on`) |
+| `iter_wall_clock_limit_s` | `900` | P10: если итерация длилась > N секунд (prefetch+explorer+replanner), halt с `stopped_early_reason=ITER_WALL_CLOCK`. Установи `0` чтобы выключить. |
 
 ## При любом изменении — прогон
 
