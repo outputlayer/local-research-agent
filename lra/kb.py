@@ -26,9 +26,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 
 from .config import RESEARCH_DIR
+from .logger import get_logger
 from .utils import keyword_set
 
 KB_PATH = RESEARCH_DIR / "kb.jsonl"
+KB_COLLISIONS_PATH = RESEARCH_DIR / "kb_collisions.jsonl"
+
+log = get_logger(__name__)
 
 
 @dataclass
@@ -46,10 +50,62 @@ class Atom:
     ts: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
 
+# P8: детект metadata-коллизий — одна arxiv-id записана с разными title.
+# Признак галлюцинации / cross-contamination notes (пример из прогона:
+# 2602.10434 был "Landmine Detection" и "Engineering AI Agents" в одном kb).
+_TITLE_SIM_THRESHOLD = 0.30  # jaccard по токенам title — ниже этого = коллизия
+
+
+def _title_jaccard(a: str, b: str) -> float:
+    ta = set((a or "").lower().split())
+    tb = set((b or "").lower().split())
+    if not ta or not tb:
+        return 1.0  # пустой title — не считаем коллизией
+    return len(ta & tb) / len(ta | tb)
+
+
+def _find_prior_title(atom: Atom) -> str | None:
+    """Ищет в kb.jsonl предыдущую запись с тем же (kind, id) и возвращает её title.
+    None если нет записей или title пуст."""
+    if not KB_PATH.exists():
+        return None
+    for ln in reversed(KB_PATH.read_text(encoding="utf-8").splitlines()):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            a = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if a.get("kind") == atom.kind and a.get("id") == atom.id:
+            t = a.get("title", "").strip()
+            return t or None
+    return None
+
+
 def add(atom: Atom) -> None:
-    """Добавить атом в KB. Дедуп по (kind, id) — последняя запись побеждает только
-    в поиске (в файле остаются все для истории)."""
+    """Добавить атом в KB. Перед записью:
+    - Детект коллизии: если есть прежняя запись с тем же id, но существенно другой title,
+      пишем в kb_collisions.jsonl (для диагностики галлюцинаций/cross-contamination).
+    - Файл остаётся append-only; load() применяет дедуп по (kind, id)."""
     RESEARCH_DIR.mkdir(exist_ok=True)
+    # Collision detection ДО append
+    new_title = (atom.title or "").strip()
+    if new_title:
+        prior = _find_prior_title(atom)
+        if prior and _title_jaccard(prior, new_title) < _TITLE_SIM_THRESHOLD:
+            try:
+                with KB_COLLISIONS_PATH.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({
+                        "ts": atom.ts, "kind": atom.kind, "id": atom.id,
+                        "prior_title": prior, "new_title": new_title,
+                        "iteration": atom.iteration,
+                    }, ensure_ascii=False) + "\n")
+                log.warning("kb collision %s/%s: '%s' vs '%s' (jaccard<%.2f) — возможная "
+                            "галлюцинация, запись в kb_collisions.jsonl",
+                            atom.kind, atom.id, prior[:60], new_title[:60], _TITLE_SIM_THRESHOLD)
+            except Exception as exc:
+                log.debug("kb collision log failed: %s", exc)
     with KB_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(asdict(atom), ensure_ascii=False) + "\n")
 
