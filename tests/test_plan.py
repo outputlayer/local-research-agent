@@ -150,6 +150,23 @@ def test_guard_halts_when_all_blocked_or_done(plan_env):
     assert rep.halt_reason == "ALL_DONE_OR_BLOCKED"
 
 
+def test_guard_global_empty_streak_halts(plan_env):
+    """4+ итерации подряд без прироста notes/ids → глобальный halt
+    даже при наличии открытых задач (защита от бесконечной auto-ротации без результата).
+    """
+    plan, _ = plan_env
+    p = plan.reset("x")
+    plan.save(p)
+    # streak=3 — пока НЕ halt (open задачи есть)
+    rep = plan.guard(p, iter_=1, notes_grew=500, new_ids=2, empty_iter_streak=3)
+    assert not rep.halt
+    # streak=4 — halt включается
+    rep = plan.guard(p, iter_=2, notes_grew=500, new_ids=2, empty_iter_streak=4)
+    assert rep.halt
+    assert "GLOBAL_EMPTY_STREAK" in rep.halt_reason
+    assert "(4)" in rep.halt_reason
+
+
 def test_guard_auto_rotates_focus_after_block(plan_env):
     plan, _ = plan_env
     p = plan.reset("x")

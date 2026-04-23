@@ -566,6 +566,12 @@ def guard(plan: Plan, iter_: int, *,
     if not plan.open_tasks():
         report.halt = True
         report.halt_reason = "ALL_DONE_OR_BLOCKED"
+    elif empty_iter_streak >= 4:
+        # Глобальный halt: ≥4 итерации подряд без прироста notes/ids,
+        # вне зависимости от фокуса. Защита от случая когда auto-ротация
+        # исправно меняет фокус, но ни один не приносит результатов.
+        report.halt = True
+        report.halt_reason = f"GLOBAL_EMPTY_STREAK({empty_iter_streak})"
 
     save(plan)
     return report
