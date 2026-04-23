@@ -274,6 +274,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
     for i in range(1, depth + 1):
         focus = _current_focus(query)
         print(f"\n── итерация {i}/{depth} ──  🎯 FOCUS: {focus[:80]}")
+        t_iter_start = time.time()
         # Прогреваем disk-cache параллельно — hf+gh одновременно, до первого LLM-вызова
         pf = prefetch_iteration(focus)
         cached_marks = []
@@ -428,6 +429,17 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         if "[TODO]" not in plan_text and i > 1:
             print("✅ Нет больше [TODO]")
             metrics.stopped_early_reason = "NO_TODO"
+            break
+        # P10: per-iteration wall-clock timeout. Прошлый прогон имел итерацию
+        # длиной 9.6h (MLX-аномалия); такой overrun не должен тянуть за собой
+        # ещё N итераций той же глубины. MLX mid-call не прерываем — но после
+        # возврата смотрим суммарное время итерации и если > limit — халт.
+        iter_wall_limit = CFG.get("iter_wall_clock_limit_s", 900)
+        iter_elapsed = time.time() - t_iter_start
+        if iter_wall_limit and iter_elapsed > iter_wall_limit:
+            print(f"✅ Ранний стоп: iter {i} длилась {iter_elapsed:.0f}s > "
+                  f"limit {iter_wall_limit}s (ITER_WALL_CLOCK)")
+            metrics.stopped_early_reason = "ITER_WALL_CLOCK"
             break
         if empty_iter_streak >= 2:
             print("✅ Ранний стоп: 2 итерации подряд explorer не вырастил notes (агент застрял)")
