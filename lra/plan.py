@@ -76,6 +76,10 @@ class Plan:
     tasks: list[Task] = field(default_factory=list)
     revisions: list[Revision] = field(default_factory=list)
     version: int = 1
+    # Суммарное количество ревизий за всё время (не обрезается при сохранении).
+    # В отличие от len(revisions), которое ограничено MAX_REVISIONS в save(), этот
+    # счётчик растёт монотонно и показывает реальный «возраст» плана в plan.md.
+    total_revisions: int = 0
     # Core vocabulary: 8-15 specific domain terms from LLM bootstrap. Используется
     # в двух местах: (а) domain_gate расширяет HEADER keywords этим списком —
     # лечит слепоту gate'а когда заголовок слишком generic; (б) explorer может
@@ -227,6 +231,7 @@ class Plan:
 
     def _revise(self, iter_: int, action: str, target, why: str) -> None:
         self.revisions.append(Revision(iter=iter_, action=action, target=target, why=why))
+        self.total_revisions += 1
         # trim чтобы не распух
         if len(self.revisions) > MAX_REVISIONS * 5:
             self.revisions = self.revisions[-MAX_REVISIONS * 3:]
@@ -241,12 +246,14 @@ def load(path: Path | None = None) -> Plan | None:
         raw = json.loads(p.read_text(encoding="utf-8"))
         tasks = [Task(**t) for t in raw.get("tasks", [])]
         revisions = [Revision(**r) for r in raw.get("revisions", [])]
+        stored_revs = raw.get("total_revisions", len(revisions))
         return Plan(
             root_goal=raw["root_goal"],
             current_focus_id=raw.get("current_focus_id"),
             tasks=tasks, revisions=revisions,
             version=raw.get("version", 1),
             core_vocabulary=raw.get("core_vocabulary", []),
+            total_revisions=stored_revs,
         )
     except Exception as e:
         log.warning("plan.json повреждён (%s) — игнорируем и пересоздадим", e)
@@ -260,6 +267,7 @@ def save(plan: Plan, path: Path | None = None) -> None:
         "root_goal": plan.root_goal,
         "current_focus_id": plan.current_focus_id,
         "version": plan.version,
+        "total_revisions": plan.total_revisions,
         "core_vocabulary": plan.core_vocabulary,
         "tasks": [asdict(t) for t in plan.tasks],
         "revisions": [asdict(r) for r in plan.revisions[-MAX_REVISIONS:]],
@@ -281,7 +289,9 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
     in_prog = [t for t in plan.tasks if t.status == "in_progress"]
     done = [t for t in plan.tasks if t.status == "done"]
     blocked = [t for t in plan.tasks if t.status == "blocked"]
-    total = len(plan.tasks)
+    # Исключаем dropped из знаменателя — split-контейнеры и вытесненные задачи
+    # не должны делать видимый прогресс меньше реального.
+    total = len([t for t in plan.tasks if t.status != "dropped"])
     pct = int(100 * len(done) / total) if total else 0
 
     lines = [
@@ -298,7 +308,7 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
         "",
         f"**Прогресс: {len(done)}/{total} done ({pct}%)** · "
         f"open={len(todo)} · in_progress={len(in_prog)} · blocked={len(blocked)} · "
-        f"ревизий={len(plan.revisions)}",
+        f"ревизий={plan.total_revisions}",
         "",
     ])
 
