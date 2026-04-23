@@ -116,11 +116,18 @@ class ArxivSearch(BaseTool):
     description = (
         "Fallback-поиск статей через arXiv API. Используй когда hf_papers пуст, "
         "устарел или не нашёл нужную подтему. Возвращает arxiv-id, заголовок, "
-        "авторов, дату и abstract."
+        "авторов, дату и abstract.\n"
+        "ВАЖНО: для узких доменов (signal processing, info theory, crypto) указывай "
+        "categories=['eess.SP','cs.IT','cs.CR'] — это сильно повышает релевантность "
+        "и режет шум из NLP/CV. Список arxiv категорий: arxiv.org/category_taxonomy."
     )
     parameters = [
         {"name": "query", "type": "string", "description": "Запрос", "required": True},
         {"name": "limit", "type": "integer", "description": "Сколько результатов (1-10)", "required": False},
+        {"name": "categories", "type": "array",
+         "description": "Опц. arxiv-категории (eess.SP, cs.IT, cs.CR, cs.LG, ...). "
+                        "Если задано — поиск ограничен этими категориями (OR).",
+         "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
@@ -129,7 +136,17 @@ class ArxivSearch(BaseTool):
         if not query:
             return "ошибка: query обязателен"
         limit = max(1, min(int(p.get("limit", 5)), 10))
-        dedup_key = f"arxiv: {query}"
+        # Категории: список или CSV-строка
+        raw_cats = p.get("categories") or []
+        if isinstance(raw_cats, str):
+            raw_cats = [c.strip() for c in raw_cats.split(",") if c.strip()]
+        # Sanitize: только токены формата letters[.letters], не длиннее 20 симв
+        import re as _re
+        cats = [c for c in raw_cats
+                if isinstance(c, str) and _re.fullmatch(r"[a-z\-]+(?:\.[A-Za-z\-]+)?", c)
+                and len(c) <= 25]
+        cat_suffix = " [cats=" + ",".join(cats) + "]" if cats else ""
+        dedup_key = f"arxiv: {query}{cat_suffix}"
         if normalize_query(dedup_key) in seen_queries():
             return (f"ОТКАЗ: запрос '{query}' уже выполнялся через arxiv_search в этой сессии. "
                     "Переформулируй или читай read_notes/kb_search.")
@@ -139,8 +156,13 @@ class ArxivSearch(BaseTool):
                     "Смени термины, автора или год.")
         log_query(dedup_key)
 
+        if cats:
+            cat_clause = "(" + " OR ".join(f"cat:{c}" for c in cats) + ")"
+            search_query = f"{cat_clause} AND all:{query}"
+        else:
+            search_query = f"all:{query}"
         url = "http://export.arxiv.org/api/query?" + urlencode({
-            "search_query": f"all:{query}",
+            "search_query": search_query,
             "start": 0,
             "max_results": limit * 2,
             "sortBy": "submittedDate",

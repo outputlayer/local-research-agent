@@ -93,3 +93,57 @@ def test_arxiv_search_domain_gate_skips_offtopic_autosave(tmp_path, monkeypatch)
 
     assert "2501.00001" in out
     assert "отфильтровано domain gate: 1" in out
+
+
+def test_arxiv_search_categories_in_query(tmp_path, monkeypatch):
+    """categories=['eess.SP','cs.IT'] → search_query содержит cat:eess.SP OR cat:cs.IT."""
+    tools = _patch(tmp_path, monkeypatch)
+    tool = tools.ArxivSearch()
+    fresh = (datetime.now(UTC) - timedelta(days=30)).date().isoformat()
+    xml = _feed(
+        {"id": "2502.99999v1", "title": "Cat-filtered paper",
+         "summary": "signal processing electronic warfare",
+         "published_at": fresh, "authors": ["X"]},
+    )
+    captured = {}
+    def _fake_fetch(url, timeout=20):
+        captured["url"] = url
+        return xml
+    monkeypatch.setattr(tools._helpers, "_fetch_text", _fake_fetch)
+
+    out = tool.call({"query": "jamming detection", "limit": 3,
+                     "categories": ["eess.SP", "cs.IT"]})
+
+    assert "2502.99999" in out
+    url = captured["url"]
+    # URL-encoded: пробелы как +, AND/OR/cat: внутри
+    assert "cat%3Aeess.SP" in url
+    assert "cat%3Acs.IT" in url
+    assert "+OR+" in url
+    assert "+AND+all%3Ajamming" in url
+
+
+def test_arxiv_search_categories_sanitized(tmp_path, monkeypatch):
+    """Невалидные категории отбрасываются (защита от инъекции в query string)."""
+    tools = _patch(tmp_path, monkeypatch)
+    tool = tools.ArxivSearch()
+    fresh = (datetime.now(UTC) - timedelta(days=30)).date().isoformat()
+    xml = _feed(
+        {"id": "2503.11111v1", "title": "P", "summary": "signal processing",
+         "published_at": fresh, "authors": ["Y"]},
+    )
+    captured = {}
+    def _fake(url, timeout=20):
+        captured["url"] = url
+        return xml
+    monkeypatch.setattr(tools._helpers, "_fetch_text", _fake)
+
+    # Mixed: один валидный, два мусорных (с пробелом, с кавычкой)
+    tool.call({"query": "test query A", "limit": 2,
+               "categories": ["eess.SP", "drop table users", "x' OR '1"]})
+
+    url = captured["url"]
+    assert "cat%3Aeess.SP" in url
+    # Мусор не просочился
+    assert "drop" not in url.lower()
+    assert "1%27" not in url
