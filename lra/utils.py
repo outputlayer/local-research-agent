@@ -207,7 +207,15 @@ def extract_ids(text: str) -> set[str]:
 
 
 def keyword_set(s: str) -> set[str]:
-    return {w.lower() for w in re.findall(r"[A-Za-zА-Яа-я][A-Za-zА-Яа-я\-]{4,}", s)}
+    """Множество значимых токенов для jaccard-сравнения.
+
+    Включает слова ≥5 букв И 4-значные числа (годы: 2023/2024/2025…).
+    Годы важны для fuzzy-dedup: 'stability 2023' и 'stability 2024' —
+    разные запросы, без них jaccard=1.0 → ложный ОТКАЗ-duplicate loop.
+    """
+    words = {w.lower() for w in re.findall(r"[A-Za-zА-Яа-я][A-Za-zА-Яа-я\-]{4,}", s)}
+    years = set(re.findall(r"\b(20\d{2})\b", s))  # 2000-2099
+    return words | years
 
 
 # Явные anti-keywords: если хотя бы один встречается в abstract/description — бумага

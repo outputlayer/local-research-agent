@@ -33,10 +33,11 @@ def seen_queries() -> set[str]:
 
 
 # Порог, выше которого два запроса считаются семантически эквивалентными.
-# Эмпирически: 0.75 ловит перестановки слов типа "X Y Z" vs "X Y Z python stars pushedAt"
-# не трогая разные темы. См. research/querylog.md от 2026-04-21 — массовое дублирование
-# запросов-перефразировок к WebWeaver/AgentCPM обходило точный dedup.
-FUZZY_DUP_THRESHOLD = 0.75
+# История: 0.75 ловил перестановки слов, но с добавлением годов в keyword_set
+# (fix 2026-04-23) запрос "X 2024" vs "X 2023" даёт jaccard=0.75 — ровно на пороге.
+# Повышаем до 0.80: year-diff (7 слов, 1 год разный) → 0.75 (пропускает),
+# настоящий дубликат (перестановка/+1 слово) → ≥0.86 (блокирует).
+FUZZY_DUP_THRESHOLD = 0.80
 
 
 def is_similar_to_seen(query: str) -> str | None:
@@ -44,12 +45,19 @@ def is_similar_to_seen(query: str) -> str | None:
 
     Возвращает найденный дубликат (исходный текст) если похожесть ≥ FUZZY_DUP_THRESHOLD,
     иначе None. Учитывает последние 30 запросов — ограничение для скорости O(30·log).
+
+    Дополнительно: если новый запрос является НАДМНОЖЕСТВОМ старого (все слова
+    старого есть в новом + лишние шумовые), тоже считается дубликатом — это ловит
+    случаи добавления `pushedAt`, `framework`, `stars` к уже выполненному запросу.
+    НО: разные годы (2023 vs 2024) — НЕ дубликаты даже если всё остальное совпадает,
+    т.к. год — значимый фильтр для поиска новых статей.
     """
     if not QUERYLOG_PATH.exists():
         return None
     q_kw = keyword_set(query)
     if len(q_kw) < 3:  # слишком короткие запросы не фильтруем — могут быть разными
         return None
+    q_years = {w for w in q_kw if re.fullmatch(r"20\d{2}", w)}
     recent: list[str] = []
     for ln in QUERYLOG_PATH.read_text(encoding="utf-8").splitlines():
         s = ln.strip()
@@ -57,7 +65,19 @@ def is_similar_to_seen(query: str) -> str | None:
             continue
         recent.append(s.lstrip("- ").strip())
     for past in reversed(recent[-30:]):
-        if jaccard(q_kw, keyword_set(past)) >= FUZZY_DUP_THRESHOLD:
+        p_kw = keyword_set(past)
+        # Разные годы — явно разные запросы, не блокируем.
+        p_years = {w for w in p_kw if re.fullmatch(r"20\d{2}", w)}
+        if q_years and p_years and q_years != p_years:
+            continue
+        score = jaccard(q_kw, p_kw)
+        if score >= FUZZY_DUP_THRESHOLD:
+            return past
+        # Containment: новый = надмножество старого (добавлены шумовые слова).
+        # Исключаем годы из containment-check — год отличает запросы.
+        q_no_year = q_kw - q_years
+        p_no_year = p_kw - p_years
+        if p_no_year and p_no_year <= q_no_year and len(p_no_year) >= 3:
             return past
     return None
 
