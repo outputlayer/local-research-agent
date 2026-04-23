@@ -624,6 +624,37 @@ def _canonicalize_sources_file(invalid_ids: list[str]) -> bool:
     return changed
 
 
+_UNAPPROVED_BANNER_MARK = "<!-- lra-unapproved-banner -->"
+
+
+def _prepend_unapproved_banner(n_rounds: int, invalid: list[str], suspicious: list[str]) -> None:
+    """Вставляет warning-баннер в начало draft.md когда critic не approve'д его.
+
+    Идемпотентен: если баннер уже есть (маркер в HTML-комменте), не дублирует.
+    """
+    if not DRAFT_PATH.exists():
+        return
+    original = DRAFT_PATH.read_text(encoding="utf-8")
+    if _UNAPPROVED_BANNER_MARK in original:
+        return
+    parts = [
+        f"{_UNAPPROVED_BANNER_MARK}",
+        "> ⚠️ **Draft НЕ approved критиком**",
+        f"> Пройдено {n_rounds} раундов критики, ни один не завершился APPROVED.",
+    ]
+    if invalid:
+        parts.append(f"> Галлюцинированные id (удалены из Источников): {', '.join(invalid)}.")
+    if suspicious:
+        parts.append(f"> Подозрительные цитаты (слабое совпадение с notes): {', '.join(suspicious)}.")
+    parts.extend([
+        "> Проверяй факты вручную перед использованием.",
+        "",
+        "",
+    ])
+    banner = "\n".join(parts)
+    DRAFT_PATH.write_text(banner + original, encoding="utf-8")
+
+
 def _hitl_review(query: str, writer: Assistant, writer_msgs: list,
                  valid: int, invalid: list, suspicious: list) -> None:
     """Human-in-the-loop пауза после validator'а. Печатает превью + метрики и
@@ -861,6 +892,18 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
         if _canonicalize_sources_file(list(invalid)):
             removed = ", ".join(invalid) if invalid else "0"
             print(f"   🧾 канонизированы ## Источники (убрано invalid: {removed})")
+        # P9: если НИ ОДИН из critic-раундов не выдал approved=True, draft
+        # финализирован принудительно (critic'у не хватило раундов либо он
+        # не смог подтвердить). Вставляем явный warning-баннер в начало draft'а
+        # и отмечаем в metrics как ранний стоп по качеству.
+        approved_any = any(getattr(cr, "approved", False) for cr in metrics.critic_rounds)
+        if metrics.critic_rounds and not approved_any:
+            n = len(metrics.critic_rounds)
+            _prepend_unapproved_banner(n, invalid, suspicious)
+            if not metrics.stopped_early_reason:
+                metrics.stopped_early_reason = f"CRITIC_UNAPPROVED_AFTER_{n}_ROUNDS"
+            print(f"   ⚠️  P9: draft НЕ approved после {n} critic-раундов — "
+                  f"вставлен warning-баннер, stopped_early_reason={metrics.stopped_early_reason}")
         # HITL pause-point: даём пользователю шанс ткнуть «перепиши про X» до финализации.
         _hitl_review(query, writer, writer_msgs, valid, invalid, suspicious)
         metrics.final_draft_chars = DRAFT_PATH.stat().st_size
