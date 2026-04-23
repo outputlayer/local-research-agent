@@ -544,6 +544,86 @@ def _normalize_draft_file() -> bool:
     return False
 
 
+# ── P7: канонизация секции "## Источники" по факту цитат в body ──────────
+_SOURCES_HEADING_RE = re.compile(
+    r"(^|\n)##+\s*(Источники|Sources|References)\s*\n.*?(?=\n##\s|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+_BODY_ARXIV_RE = re.compile(r"\[(\d{4}\.\d{4,6})(?:v\d+)?\]")
+_BODY_REPO_RE = re.compile(r"\[repo:\s*([^\]]+)\]|(?:^|\s)([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)(?=[\s.,\]])")
+
+
+def _canonicalize_sources_section(text: str, invalid_ids: list[str]) -> tuple[str, bool]:
+    """Заменяет содержимое ## Источники каноническим списком из body-цитат.
+
+    1. Собирает все [arxiv-id] из body (ВЕСЬ draft до секции Sources).
+    2. Выкидывает из этого списка invalid_ids (validator'ом помеченные как не-существующие).
+    3. Собирает [repo: owner/name] из body.
+    4. Перегенерирует секцию Sources каноническим форматом.
+
+    Защищает от рассинхронизации body↔sources: writer склонен не обновлять этот
+    раздел когда меняет тело. Также чистит 2607.15491-подобные галлюцинации из финала.
+
+    Возвращает (new_text, changed).
+    """
+    m = _SOURCES_HEADING_RE.search(text)
+    if not m:
+        return text, False
+    sources_start = m.start(0)
+    body = text[:sources_start]
+    # arxiv-id из body
+    body_arxiv = []
+    seen_arx: set[str] = set()
+    invalid_set = {i.strip() for i in (invalid_ids or [])}
+    for aid in _BODY_ARXIV_RE.findall(body):
+        if aid in invalid_set:
+            continue
+        if aid in seen_arx:
+            continue
+        seen_arx.add(aid)
+        body_arxiv.append(aid)
+    # repo-id: только форма [repo: X/Y] (bare slashes в тексте слишком noisy для draft)
+    body_repos: list[str] = []
+    seen_repo: set[str] = set()
+    for repo_bracket, _ in _BODY_REPO_RE.findall(body):
+        r = (repo_bracket or "").strip()
+        if not r:
+            continue
+        if r in seen_repo:
+            continue
+        seen_repo.add(r)
+        body_repos.append(r)
+    # Рендер
+    lines: list[str] = ["", "## Источники", ""]
+    if body_arxiv:
+        for aid in body_arxiv:
+            lines.append(f"- [{aid}](https://arxiv.org/abs/{aid})")
+    else:
+        lines.append("_нет arxiv-цитат в отчёте_")
+    if body_repos:
+        lines.append("")
+        lines.append("**Репозитории:**")
+        for r in body_repos:
+            lines.append(f"- [{r}](https://github.com/{r})")
+    lines.append("")
+    new_section = "\n".join(lines)
+    # Сохраняем хвост после секции (если есть)
+    tail = text[m.end(0):]
+    new_text = body.rstrip() + "\n" + new_section + (tail if tail else "")
+    return new_text, new_text != text
+
+
+def _canonicalize_sources_file(invalid_ids: list[str]) -> bool:
+    """Применяет _canonicalize_sources_section к draft.md inplace."""
+    if not DRAFT_PATH.exists():
+        return False
+    original = DRAFT_PATH.read_text(encoding="utf-8")
+    fixed, changed = _canonicalize_sources_section(original, invalid_ids)
+    if changed:
+        DRAFT_PATH.write_text(fixed, encoding="utf-8")
+    return changed
+
+
 def _hitl_review(query: str, writer: Assistant, writer_msgs: list,
                  valid: int, invalid: list, suspicious: list) -> None:
     """Human-in-the-loop пауза после validator'а. Печатает превью + метрики и
@@ -776,6 +856,11 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
         if suspicious:
             print(f"   ⚠️  слабое совпадение цитаты с notes: {suspicious}")
             print("       (id существует, но текст вокруг него в draft'е не отражает факты из notes)")
+        # P7: канонизируем ## Источники по body-цитатам, минус invalid_ids.
+        # Writer часто не обновляет этот раздел и в нём остаются галлюцинированные id.
+        if _canonicalize_sources_file(list(invalid)):
+            removed = ", ".join(invalid) if invalid else "0"
+            print(f"   🧾 канонизированы ## Источники (убрано invalid: {removed})")
         # HITL pause-point: даём пользователю шанс ткнуть «перепиши про X» до финализации.
         _hitl_review(query, writer, writer_msgs, valid, invalid, suspicious)
         metrics.final_draft_chars = DRAFT_PATH.stat().st_size
