@@ -31,6 +31,32 @@ log = get_logger("tools")
 _ARXIV_FEED_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
 
+def _has_core_vocabulary(plan_text: str) -> bool:
+    """Проверяет наличие строки `**Core vocabulary:** ...` в plan.md.
+
+    Сигнал того, что bootstrap planner отработал успешно (LLM сгенерил 8-15
+    специфичных доменных терминов). Если строки нет — bootstrap упал
+    (mlx crashed / невалидный JSON / fallback на static plan), и domain gate
+    работает только по 4 словам из заголовка темы. Это пропускало мины и
+    audio vocoder под видом EW.
+
+    При strict_domain_gate=True и vocab_required=True (default) такой режим
+    fail-closed: gate возвращает False с reason='no_vocabulary' до тех пор,
+    пока пользователь явно не разрешит работу без vocabulary через
+    `CFG['allow_no_vocab'] = True`.
+    """
+    if not plan_text:
+        return False
+    for ln in plan_text.splitlines()[:10]:
+        if ln.lstrip().lower().startswith("**core vocabulary:"):
+            # Проверяем что после двоеточия есть хоть какие-то термины,
+            # а не просто пустая строка от broken bootstrap.
+            payload = ln.split(":", 1)[1] if ":" in ln else ""
+            payload = payload.strip().strip("*").strip()
+            return len(payload) >= 5
+    return False
+
+
 def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
     """Возвращает (known_ids, unknown_ids) — какие arxiv-id из content есть в kb.jsonl.
 
@@ -68,7 +94,13 @@ def domain_gate(content: str) -> tuple[bool, str, set[str], set[str]]:
     """
     if not _cfg.PLAN_PATH.exists():
         return True, "no_plan", set(), set()
-    header_kws, seed_kws = extract_topic_keywords_tiered(_cfg.PLAN_PATH.read_text(encoding="utf-8"))
+    plan_text = _cfg.PLAN_PATH.read_text(encoding="utf-8")
+    # Fail-closed: если bootstrap не положил **Core vocabulary:**, gate работает
+    # только по 4 словам заголовка → пропускает мины и audio vocoder. Блокируем
+    # все append'ы пока пользователь явно не разрешит CFG['allow_no_vocab']=True.
+    if not _has_core_vocabulary(plan_text) and not _cfg.CFG.get("allow_no_vocab", False):
+        return False, "no_vocabulary", set(), set()
+    header_kws, seed_kws = extract_topic_keywords_tiered(plan_text)
     if len(header_kws) < 2:
         return True, "slow_start", header_kws, set()
     # Явные anti-keywords: audio vocoder, jailbreak, automotive lidar —
@@ -110,7 +142,10 @@ def gate_paper_for_kb(paper_id: str, title: str, abstract: str) -> tuple[bool, s
     """
     if not _cfg.CFG.get("strict_domain_gate", True) or not _cfg.PLAN_PATH.exists():
         return True, "bypass", set(), set()
-    header_kws, _ = extract_topic_keywords_tiered(_cfg.PLAN_PATH.read_text(encoding="utf-8"))
+    plan_text = _cfg.PLAN_PATH.read_text(encoding="utf-8")
+    if not _has_core_vocabulary(plan_text) and not _cfg.CFG.get("allow_no_vocab", False):
+        return False, "no_vocabulary", set(), set()
+    header_kws, _ = extract_topic_keywords_tiered(plan_text)
     if len(header_kws) < 2:
         return True, "slow_start", set(), header_kws
     anti = has_anti_keyword(f"{title} {abstract}")
@@ -137,10 +172,13 @@ def gate_repo_for_kb(repo_name: str, description: str) -> tuple[bool, str]:
     """
     if not _cfg.CFG.get("strict_domain_gate", True) or not _cfg.PLAN_PATH.exists():
         return True, "bypass"
+    plan_text = _cfg.PLAN_PATH.read_text(encoding="utf-8")
+    if not _has_core_vocabulary(plan_text) and not _cfg.CFG.get("allow_no_vocab", False):
+        return False, "no_vocabulary"
     anti = has_anti_keyword(f"{repo_name} {description}")
     if anti:
         return False, f"anti_keyword:{anti}"
-    header_kws, _ = extract_topic_keywords_tiered(_cfg.PLAN_PATH.read_text(encoding="utf-8"))
+    header_kws, _ = extract_topic_keywords_tiered(plan_text)
     if len(header_kws) < 2:
         return True, "slow_start"
     kws = keyword_set(f"{repo_name} {description}")

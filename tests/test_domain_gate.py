@@ -28,6 +28,8 @@ def _isolated(tmp_path, monkeypatch):
 _EW_PLAN = (
     "# Plan: Modern approaches in electronic warfare (EW) and electronic intelligence "
     "(ELINT) technologies in the military\n\n"
+    "**Core vocabulary:** ELINT, SIGINT, ESM, ECM, jammers, receivers, spectrum sensing, "
+    "direction finding, pulse deinterleaving, anti-jamming, cognitive radar, LPI/LPD\n\n"
     "## [TODO]\n"
     "- [T1] Spectrum sensing algorithms for cognitive EW in contested environments\n"
     "- [T2] Software-defined radar (SDR) for agile electronic support measures\n"
@@ -39,8 +41,10 @@ def test_tiered_keywords_separate_header_from_seeds():
     from lra.utils import extract_topic_keywords_tiered
     header, seeds = extract_topic_keywords_tiered(_EW_PLAN)
     assert {"electronic", "warfare", "elint", "intelligence"}.issubset(header)
-    # Seeds disjoint от header, содержат domain specifics
-    assert "spectrum" in seeds or "radar" in seeds
+    # Core vocabulary терминах теперь тоже в header (vocab-строка часть header'а).
+    assert "jammers" in header or "receivers" in header
+    # Seeds disjoint от header, содержат domain specifics не из vocab
+    assert "fingerprinting" in seeds or "geolocation" in seeds
     # Generic-шум отфильтрован в обоих уровнях
     for noise in ("modern", "approach", "contested", "environments", "canyons",
                   "between", "challenges", "advanced", "novel", "algorithms"):
@@ -162,7 +166,10 @@ def test_gate_paper_for_kb_bypass_without_plan(_isolated):
     assert passed is True
 
 
-_NARROW_PLAN = "# Plan: electronic warfare and ELINT\n"  # header = {electronic, warfare, elint, intelligence} = 4 слова
+_NARROW_PLAN = (
+    "# Plan: electronic warfare and ELINT\n\n"
+    "**Core vocabulary:** ELINT, ECM, jammers\n"
+)  # header = {electronic, warfare, elint, intelligence, jammers, ecm} ≈ 4-6 слов
 
 
 def test_gate_paper_for_kb_adaptive_threshold_narrow_header(_isolated):
@@ -245,3 +252,63 @@ def test_gate_repo_for_kb_passes_ew_repo(_isolated):
         "Deep reinforcement learning for electronic warfare anti-jamming radar spectrum sensing",
     )
     assert passed is True
+
+
+# ── Fail-closed when bootstrap planner fails (нет **Core vocabulary:** в plan.md) ──
+_PLAN_NO_VOCAB = (
+    "# Plan: electronic warfare and ELINT\n\n"
+    "## [TODO]\n"
+    "- [T1] some seed\n"
+)
+
+
+def test_gate_paper_fails_closed_without_vocabulary(_isolated):
+    """Bootstrap упал → нет Core vocabulary → даже релевантный paper НЕ проходит.
+
+    Раньше gate работал по 4 словам заголовка → пропускал мины (cognitive radar
+    в minesweeping context) под видом EW. Теперь fail-closed: пока пользователь
+    явно не разрешит CFG['allow_no_vocab']=True, всё блокируется.
+    """
+    from lra import tools
+    (_isolated / "plan.md").write_text(_PLAN_NO_VOCAB, encoding="utf-8")
+    passed, reason, _o, _h = tools.gate_paper_for_kb(
+        "2401.00001",
+        "Cognitive electronic warfare spectrum sensing",
+        "ELINT signal classification in contested EW environments",
+    )
+    assert passed is False
+    assert reason == "no_vocabulary"
+
+
+def test_gate_repo_fails_closed_without_vocabulary(_isolated):
+    from lra import tools
+    (_isolated / "plan.md").write_text(_PLAN_NO_VOCAB, encoding="utf-8")
+    passed, reason = tools.gate_repo_for_kb(
+        "example/ew-radar",
+        "EW radar spectrum sensing for ELINT",
+    )
+    assert passed is False
+    assert reason == "no_vocabulary"
+
+
+def test_append_notes_fails_closed_without_vocabulary(_isolated):
+    from lra import kb, tools
+    (_isolated / "plan.md").write_text(_PLAN_NO_VOCAB, encoding="utf-8")
+    kb.add(kb.Atom(id="2401.00001", kind="paper", topic="ew",
+                   title="EW radar", claim="electronic warfare spectrum sensing"))
+    result = tools.AppendNotes().call({"content": "[2401.00001] EW radar paper"})
+    assert "ОТКАЗ" in result and "no_vocabulary" in result
+
+
+def test_allow_no_vocab_escape_hatch(_isolated, monkeypatch):
+    """CFG['allow_no_vocab']=True позволяет работать без vocabulary (на свой страх)."""
+    from lra import config, tools
+    (_isolated / "plan.md").write_text(_PLAN_NO_VOCAB, encoding="utf-8")
+    monkeypatch.setitem(config.CFG.extra, "allow_no_vocab", True)
+    passed, reason, _o, _h = tools.gate_paper_for_kb(
+        "2401.00001",
+        "Cognitive electronic warfare spectrum sensing",
+        "ELINT signal classification in contested EW environments",
+    )
+    assert passed is True
+    assert reason == "passed"
