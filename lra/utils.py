@@ -1,4 +1,4 @@
-"""Чистые утилиты без побочных эффектов (легко тестируются)."""
+"""Pure utilities without side effects (easy to test)."""
 from __future__ import annotations
 
 import json
@@ -10,27 +10,27 @@ _CONTENT_ALIASES = ("content", "text", "markdown", "md", "body", "data", "value"
 
 
 def parse_args(params) -> dict:
-    """Толерантный парсер tool-аргументов: чинит литеральные переносы строк и
-    гарантирует dict на выходе (LLM иногда присылает просто строку)."""
+    """Tolerant tool-arguments parser: fixes literal newlines and
+    guarantees a dict on output (the LLM sometimes sends a bare string)."""
     if isinstance(params, dict):
         return params
     if not isinstance(params, str):
         return {"content": str(params)}
 
-    # Pre-clean: LLM часто лепит хвост tool-call wrapper'а внутрь arguments —
+    # Pre-clean: the LLM often glues tool-call wrapper tails inside arguments —
     # `{"content": "..."}</arguments`, `</tool_call>`, trailing ```, etc.
-    # Без этого json5 парсер падает, мы валимся в финальный fallback и пишем
-    # в файл сырой JSON-блоб вместо content (баг был виден в draft.md).
+    # Without this json5 crashes, we fall back to the final path and write
+    # a raw JSON blob into the file instead of content (bug was visible in draft.md).
     s = params.strip()
     for tail in ("</arguments>", "</arguments", "</tool_call>", "</tool_call", "```"):
         if s.endswith(tail):
             s = s[: -len(tail)].rstrip()
 
-    # Double-encoded JSON: LLM иногда оборачивает args в JSON string literal
-    # вместо JSON object — `"{\"content\": \"markdown\"}"`. Если мы оставим как есть,
-    # json5.loads распарсит это в обычную python-строку, _wrap обернёт → в файл
-    # улетит сериализованный JSON-блоб вместо markdown (виден в draft.md этой сессии).
-    # Разворачиваем до 3 уровней обёртки (больше не встречали).
+    # Double-encoded JSON: the LLM sometimes wraps args in a JSON string literal
+    # instead of a JSON object — `"{\"content\": \"markdown\"}"`. If we leave it as is,
+    # json5.loads parses it to a plain python string, _wrap wraps it → the file
+    # gets a serialized JSON blob instead of markdown (seen in draft.md this session).
+    # Unwrap up to 3 wrapping levels (never seen more in practice).
     for _ in range(3):
         if len(s) >= 2 and s.startswith('"') and s.endswith('"'):
             try:
@@ -41,7 +41,7 @@ def parse_args(params) -> dict:
             except Exception:
                 pass
         break
-    # balanced-brace trim: отсекаем любой хвост после последней `}` на верхнем уровне
+    # balanced-brace trim: drop any tail after the last top-level `}`
     if s.startswith("{"):
         depth = 0
         last_close = -1
@@ -88,22 +88,22 @@ def parse_args(params) -> dict:
         return _wrap(json5.loads(fixed))
     except Exception:
         pass
-    # Последний шанс: ручное извлечение значения ключа с УЧЁТОМ escaped quotes.
-    # `(?:\\.|[^"\\])*` ест любой экранированный символ или не-кавычку/не-бэкслэш.
+    # Last resort: manually extract the key value honoring escaped quotes.
+    # `(?:\\.|[^"\\])*` eats any escaped character or non-quote/non-backslash.
     for key in ("content", "code", "query", "url"):
         m = re.search(rf'"{key}"\s*:\s*"((?:\\.|[^"\\])*)"', s, re.DOTALL)
         if m:
             raw = m.group(1)
-            # unescape стандартный JSON-набор
+            # unescape standard JSON escapes
             try:
                 decoded = json.loads(f'"{raw}"')
             except Exception:
                 decoded = raw.replace('\\n', '\n').replace('\\"', '"').replace("\\\\", "\\")
             return {key: decoded}
-    # Совсем ничего не сматчилось. Если вход ПОХОЖ на JSON (начинается с `{` или
-    # содержит `"content"`/`"code"`) — это сломанная структура, помечаем префиксом
-    # чтобы проблема была видна в draft/notes. Иначе — обычная bare-string, которую
-    # LLM прислал без объекта: отдаём как content без изменений.
+    # Nothing matched. If the input LOOKS LIKE JSON (starts with `{` or
+    # contains `"content"`/`"code"`) — this is a broken structure, mark with a prefix
+    # so the problem shows in draft/notes. Otherwise — a bare string that the
+    # LLM sent without an object: return it as content unchanged.
     looks_like_json = s.startswith("{") or re.search(r'"(?:content|code|query|url)"', s) is not None
     if looks_like_json:
         return {"content": f"[parse_args: unrecognized tool args]\n{params}"}
@@ -111,10 +111,10 @@ def parse_args(params) -> dict:
 
 
 def get_content(params) -> str:
-    """Достаёт content из tool-аргументов с мягким fallback. Используй в тулах,
-    которые принимают markdown-текст (write_draft, append_notes и т.п.) —
-    чтобы KeyError не ронял всю цепочку когда LLM прислал `{"text": ...}`,
-    `{"markdown": ...}` или просто один ключ не того имени.
+    """Extracts content from tool-arguments with a soft fallback. Use in tools
+    that accept markdown text (write_draft, append_notes, etc.) —
+    so that KeyError does not break the whole chain when the LLM sent `{"text": ...}`,
+    `{"markdown": ...}` or just one wrongly-named key.
     """
 
     def _unwrap(value):
@@ -170,12 +170,12 @@ def get_content(params) -> str:
     if "content" in d:
         content = _unwrap(d["content"])
         return content if isinstance(content, str) else (json.dumps(content, ensure_ascii=False) if content is not None else "")
-    # Common aliases LLM изобретает
+    # Common aliases the LLM invents
     for alt in _CONTENT_ALIASES[1:]:
         if alt in d:
             content = _unwrap(d[alt])
             return content if isinstance(content, str) else (json.dumps(content, ensure_ascii=False) if content is not None else "")
-    # Иначе берём первое строковое значение — лучше странный draft чем крэш.
+    # Otherwise take the first string value — a weird draft is better than a crash.
     for v in d.values():
         if isinstance(v, str):
             content = _unwrap(v)
@@ -187,47 +187,47 @@ def normalize_query(q: str) -> str:
     return re.sub(r"\s+", " ", q.strip().lower())
 
 
-# Arxiv-id: YYMM.NNNNN (YY=год, MM=01-12 месяц, N=4-5 цифр seq).
-# Строгая версия (2026-04): negative lookahead/behind отсекают:
-#   - десятичные числа в тексте ("effect size 2504.03 mm/s" — только 2 цифры, но 2504.03456 матчился бы)
-#   - обрывки id ("2301.123456" → 6 цифр, не arxiv)
-#   - id внутри длиннее числа ("A12301.12345", "2301.12345.67")
-# MM=01-12 чтобы "2013.12345" (невалидный месяц 13) не матчился.
+# Arxiv-id: YYMM.NNNNN (YY=year, MM=01-12 month, N=4-5 digits seq).
+# Strict version (2026-04): negative lookahead/behind cut off:
+#   - decimal numbers in text ("effect size 2504.03 mm/s" — only 2 digits, but 2504.03456 would match)
+#   - id fragments ("2301.123456" → 6 digits, not arxiv)
+#   - id embedded in a longer number ("A12301.12345", "2301.12345.67")
+# MM=01-12 so "2013.12345" (invalid month 13) does not match.
 ARXIV_RE = re.compile(
     r"(?<![\d.])(\d{2}(?:0[1-9]|1[0-2])\.\d{4,5})(?![\d.])"
 )
 
-# Стоп-слова для keyword-overlap проверок (используются валидатором).
-STOPWORDS = frozenset({"paper", "paperов", "статья", "работа", "авторы", "model", "method"})
+# Stopwords for keyword-overlap checks (used by the validator).
+STOPWORDS = frozenset({"paper", "papers", "article", "work", "authors", "model", "method"})
 
 
 def extract_ids(text: str) -> set[str]:
-    """Единая точка правды для извлечения arxiv-id из любого текста."""
+    """Single source of truth for extracting arxiv-ids from any text."""
     return set(ARXIV_RE.findall(text or ""))
 
 
 def keyword_set(s: str) -> set[str]:
-    """Множество значимых токенов для jaccard-сравнения.
+    """Set of significant tokens for jaccard comparison.
 
-    Включает слова ≥5 букв И 4-значные числа (годы: 2023/2024/2025…).
-    Годы важны для fuzzy-dedup: 'stability 2023' и 'stability 2024' —
-    разные запросы, без них jaccard=1.0 → ложный ОТКАЗ-duplicate loop.
+    Includes words ≥5 letters AND 4-digit numbers (years: 2023/2024/2025…).
+    Years matter for fuzzy dedup: 'stability 2023' and 'stability 2024' —
+    different queries; without them jaccard=1.0 → false REJECT-duplicate loop.
     """
     words = {w.lower() for w in re.findall(r"[A-Za-zА-Яа-я][A-Za-zА-Яа-я\-]{4,}", s)}
     years = set(re.findall(r"\b(20\d{2})\b", s))  # 2000-2099
     return words | years
 
 
-# Явные anti-keywords: если хотя бы один встречается в abstract/description — бумага
-# не относится к EW/ELINT/радарной тематике, отклоняем без подсчёта overlap.
-# Мотивация: "cognitive" есть в EW_CORE, но та же ComVo/emotional-support/LLM-safety
-# статья может иметь 1-2 случайных совпадения с header и пройти gate. Anti-list
-# срабатывает РАНЬШЕ positive-check и возвращает (False, "anti_keyword").
+# Explicit anti-keywords: if any of these shows up in abstract/description — the paper
+# does not belong to the EW/ELINT/radar domain; reject without counting overlap.
+# Motivation: "cognitive" is in EW_CORE, yet the same ComVo/emotional-support/LLM-safety
+# paper can have 1-2 accidental overlaps with the header and pass the gate. The anti-list
+# fires BEFORE positive-check and returns (False, "anti_keyword").
 ANTI_KEYWORDS: frozenset[str] = frozenset({
     # audio/speech domain
     "vocoder", "text-to-speech", "tts", "mel-spectrogram", "waveform-synthesis",
     "audio-synthesis", "audio generation", "speech synthesis",
-    # jailbreak / LLM safety (не ELINT-security)
+    # jailbreak / LLM safety (not ELINT-security)
     "jailbreak", "jailbreaking", "safety alignment", "llm safety",
     "harmful content", "red teaming", "prompt injection",
     # automotive / lidar
@@ -238,7 +238,7 @@ ANTI_KEYWORDS: frozenset[str] = frozenset({
 
 
 def has_anti_keyword(text: str) -> str | None:
-    """Возвращает первый найденный anti-keyword в тексте, или None."""
+    """Returns the first anti-keyword found in the text, or None."""
     lower = text.lower()
     for kw in ANTI_KEYWORDS:
         if kw in lower:
@@ -246,8 +246,8 @@ def has_anti_keyword(text: str) -> str | None:
     return None
 
 
-# Generic-слова из plan.md, которые НЕ должны служить domain-якорем:
-# встречаются в любом научном abstract и дают false positive overlap.
+# Generic words from plan.md that MUST NOT serve as a domain anchor:
+# they appear in any scientific abstract and yield false-positive overlap.
 _TOPIC_GENERIC = frozenset({
     "modern", "approach", "approaches", "survey", "review", "study", "studies",
     "analysis", "research", "technique", "techniques", "method", "methods",
@@ -256,28 +256,25 @@ _TOPIC_GENERIC = frozenset({
     "plan", "focus", "todo", "done", "blocked", "progress", "digest",
     "iter", "attempts", "evidence", "revision", "revisions",
     "deep-dive", "trade-offs", "tradeoffs",
-    # generic-соединители (ловились на "electronic" в 2508.12935 emotional support)
+    # generic connectors (caught "electronic" in 2508.12935 emotional support)
     "advanced", "novel", "complex", "between", "among", "within",
     "challenges", "challenge", "problem", "problems", "issue", "issues",
     "future", "recent", "current", "emerging", "integration", "integrations",
-    # локальный шум из seeds типа "ELINT fingerprinting in urban canyons"
+    # local noise from seeds like "ELINT fingerprinting in urban canyons"
     "canyons", "canyon", "contested", "environments", "environment",
     "algorithm", "algorithms", "architecture", "architectures",
-    # ложные keywords из структуры plan.md (заголовки и metadata, не domain-terms)
-    "vocabulary",  # из "**Core vocabulary:**" — заголовок, не домен
-    "современ", "современные", "подход", "подходы", "обзор", "анализ",
-    "метод", "методы", "система", "системы", "модель", "модели",
-    "статья", "работа", "работы", "исследование", "исследования",
+    # false keywords from plan.md structure (headers and metadata, not domain terms)
+    "vocabulary",  # from "**Core vocabulary:**" — header, not domain
 })
 
 
 def _plan_sections(plan_text: str) -> tuple[str, str]:
-    """Разбивает plan.md на (header, seeds).
+    """Splits plan.md into (header, seeds).
 
-    header = первая строка (# Plan: ...) + строка `**Core vocabulary:** ...`,
-             если LLM-bootstrap её сгенерил. Это ядро темы.
-    seeds  = все строки с [Tn] — часто drift'ят и содержат specific jargon,
-             но сами по себе слабый якорь (см. canyons / challenges).
+    header = first line (# Plan: ...) + `**Core vocabulary:** ...`,
+             if LLM bootstrap produced it. This is the topic core.
+    seeds  = all lines with [Tn] — they often drift and contain specific jargon,
+             but on their own they are a weak anchor (see canyons / challenges).
     """
     if not plan_text:
         return "", ""
@@ -285,7 +282,7 @@ def _plan_sections(plan_text: str) -> tuple[str, str]:
     header_parts: list[str] = []
     if lines:
         header_parts.append(lines[0])
-    for ln in lines[1:10]:  # vocab-line рендерится сразу после header
+    for ln in lines[1:10]:  # vocab-line is rendered right after the header
         if ln.lstrip().lower().startswith("**core vocabulary:"):
             header_parts.append(ln)
             break
@@ -295,27 +292,27 @@ def _plan_sections(plan_text: str) -> tuple[str, str]:
 
 
 def extract_topic_keywords(plan_text: str) -> set[str]:
-    """Все доменные ключевые слова из plan.md (header ∪ seeds). Backwards-compat."""
+    """All domain keywords from plan.md (header ∪ seeds). Backwards-compat."""
     header, seeds = _plan_sections(plan_text)
     kws = keyword_set(header + " " + seeds)
     return {w for w in kws if w not in STOPWORDS and w not in _TOPIC_GENERIC}
 
 
 def extract_topic_keywords_tiered(plan_text: str) -> tuple[set[str], set[str]]:
-    """Двухуровневое разделение для domain gate: (header_kws, seed_kws).
+    """Two-tier split for the domain gate: (header_kws, seed_kws).
 
-    header_kws — ядро домена из заголовка (# Plan: ...). Это то, что изначально
-    спросил пользователь. ComVo (audio vocoder) не имеет ни одного overlap с
-    {electronic, warfare, elint, intelligence} — gate его режет.
-    seed_kws — специфика из [Tn] задач. Слабый якорь (drift), используется
-    только как bonus для paper'ов, которые УЖЕ прошли по header.
+    header_kws — the domain core from the header (# Plan: ...). This is what the
+    user actually asked for. ComVo (audio vocoder) has zero overlap with
+    {electronic, warfare, elint, intelligence} — the gate cuts it.
+    seed_kws — specifics from [Tn] tasks. A weak anchor (drift), used only as
+    a bonus for papers that ALREADY passed by header.
     """
     header, seeds = _plan_sections(plan_text)
     h = {w for w in keyword_set(header)
          if w not in STOPWORDS and w not in _TOPIC_GENERIC}
     s = {w for w in keyword_set(seeds)
          if w not in STOPWORDS and w not in _TOPIC_GENERIC}
-    return h, s - h  # seeds disjoint от header, чтобы не двойной учёт
+    return h, s - h  # seeds disjoint from header to avoid double counting
 
 
 def jaccard(a: set, b: set) -> float:
@@ -326,29 +323,29 @@ def jaccard(a: set, b: set) -> float:
 
 def derive_static_vocabulary(query: str, abstracts: list[str] | None = None,
                              max_terms: int = 12) -> list[str]:
-    """Извлекает домен-vocabulary из query (и опционально топ-абстрактов).
+    """Derives a domain vocabulary from a query (and optionally top abstracts).
 
-    Fallback для случая когда LLM-bootstrap упал и core_vocabulary пустой.
-    Стратегия: keyword_set из query + abstracts, отфильтровать STOPWORDS/_TOPIC_GENERIC,
-    отсортировать по частоте вхождений в комбинированном тексте, взять топ-N.
+    Fallback for when LLM bootstrap crashed and core_vocabulary is empty.
+    Strategy: keyword_set from query + abstracts, filter out STOPWORDS/_TOPIC_GENERIC,
+    sort by frequency of occurrence in the combined text, keep top-N.
 
-    Это резервный план — терминов будет меньше и они будут менее точные чем
-    от LLM (нет уровня абстракции, нет аббревиатур которые LLM знает по контексту),
-    но domain gate перестанет работать только по 4 словам заголовка.
+    This is a backup plan — fewer and less precise terms than the LLM produces
+    (no abstraction level, no acronyms the LLM knows by context), but the
+    domain gate stops relying only on 4 header words.
 
-    Параметры:
-        query: исходный запрос пользователя
-        abstracts: опциональный список abstract'ов из первых hf_papers/arxiv hit'ов
-                   (используется для расширения vocabulary терминами из реальных статей)
-        max_terms: верхняя граница vocab-size (соответствует LLM выдаче 8-15)
+    Parameters:
+        query: the user query
+        abstracts: optional list of abstracts from the first hf_papers/arxiv hits
+                   (used to extend vocabulary with terms from real papers)
+        max_terms: upper bound on vocab size (matches the LLM output 8-15)
 
-    Возвращает: список терминов (нижний регистр, дедуплицированы) длиной до max_terms.
+    Returns: list of terms (lowercase, deduplicated) of up to max_terms entries.
     """
     text = query
     if abstracts:
         text = text + " " + " ".join(abstracts)
     raw = keyword_set(text)
-    # Отфильтровать generic + stopwords + годы
+    # Filter out generic + stopwords + years
     candidates = [w for w in raw
                   if w not in STOPWORDS
                   and w not in _TOPIC_GENERIC
@@ -356,7 +353,7 @@ def derive_static_vocabulary(query: str, abstracts: list[str] | None = None,
                   and len(w) >= 4]
     if not candidates:
         return []
-    # Сортировка по частоте вхождений в text (чем чаще — тем характернее для домена).
+    # Sort by frequency of occurrence in text (the more frequent, the more characteristic).
     lower = text.lower()
     scored = [(w, lower.count(w)) for w in candidates]
     scored.sort(key=lambda p: (-p[1], p[0]))

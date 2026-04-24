@@ -1,4 +1,4 @@
-"""Единая настройка логирования. Пишет в research/run.log + stderr (WARNING+)."""
+"""Unified logging setup. Writes to research/run.log + stderr (WARNING+)."""
 from __future__ import annotations
 
 import logging
@@ -10,7 +10,7 @@ _CONFIGURED = False
 
 
 def get_logger(name: str = "lra") -> logging.Logger:
-    """Ленивая настройка: первый вызов конфигурирует root-logger пакета."""
+    """Lazy setup: the first call configures the package root logger."""
     global _CONFIGURED
     logger = logging.getLogger(name if name.startswith("lra") else f"lra.{name}")
     if _CONFIGURED:
@@ -23,7 +23,7 @@ def get_logger(name: str = "lra") -> logging.Logger:
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                             datefmt="%H:%M:%S")
 
-    # File handler — пишем всё в run.log
+    # File handler — everything goes into run.log
     try:
         Path(RUN_LOG_PATH).parent.mkdir(exist_ok=True)
         fh = logging.FileHandler(RUN_LOG_PATH, encoding="utf-8")
@@ -33,20 +33,20 @@ def get_logger(name: str = "lra") -> logging.Logger:
     except Exception:
         pass
 
-    # Stderr — только WARNING+, чтобы не мешать "typewriter" выводу пайплайна
+    # Stderr — only WARNING+, so it does not interfere with the "typewriter" pipeline output
     sh = logging.StreamHandler()
     sh.setLevel(logging.WARNING)
     sh.setFormatter(fmt)
     root.addHandler(sh)
 
-    # Шумный warning qwen-agent'а — 'Invalid json tool-calling arguments' —
-    # спамит когда модель кладёт дубликат ключа или префикс вокруг JSON. Наш
-    # `parse_args` толерантен ко всем этим случаям (json5 + regex-fallback), так что
-    # warning бесполезен пользователю и мешает читать вывод пайплайна. Поднимаем
-    # уровень этого конкретного логгера до ERROR — сами ошибки парсинга (которые
-    # действительно ломают вызов) продолжат приходить.
-    # NOTE: qwen_agent использует logger name 'qwen_agent_logger' (см. qwen_agent/log.py);
-    # filename 'nous_fncall_prompt.py' в логах — это %(filename)s в formatter'е, не имя логгера.
+    # The noisy qwen-agent warning — 'Invalid json tool-calling arguments' —
+    # spams when the model emits a duplicate key or adds a prefix around JSON. Our
+    # `parse_args` is tolerant to all these cases (json5 + regex-fallback), so this
+    # warning is useless to the user and pollutes pipeline output. We raise the
+    # level of that specific logger to ERROR — real parse errors (the ones that
+    # actually break a call) will still come through.
+    # NOTE: qwen_agent uses the logger name 'qwen_agent_logger' (see qwen_agent/log.py);
+    # the 'nous_fncall_prompt.py' filename in logs is %(filename)s in the formatter, not the logger name.
     logging.getLogger("qwen_agent_logger").setLevel(logging.ERROR)
 
     _CONFIGURED = True

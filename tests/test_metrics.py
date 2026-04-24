@@ -38,8 +38,8 @@ def test_count_critic_issues_capped_at_10():
 
 
 def test_count_critic_issues_marker_fallback():
-    """Без bullet'ов, но с маркерами проблем — считаем по маркерам."""
-    text = "В тексте есть дублирование и отсутствует в notes важное."
+    """Without bullets, but with issue markers — count the markers."""
+    text = "The text has duplication and is missing from notes an important fact."
     assert count_critic_issues(text) >= 1
 
 

@@ -1,4 +1,4 @@
-"""Простой TTL-кеш для CLI-вызовов (hf/gh). Ключ=hash(команды), значение=stdout+returncode."""
+"""Simple TTL cache for CLI calls (hf/gh). Key=hash(cmd), value=stdout+returncode."""
 from __future__ import annotations
 
 import hashlib
@@ -20,7 +20,7 @@ def _key(cmd: list[str]) -> str:
 
 
 def get(cmd: list[str], ttl_hours: float | None = None) -> dict | None:
-    """Возвращает {stdout, stderr, returncode} или None если кеш-мисс / протух."""
+    """Returns {stdout, stderr, returncode} or None on cache miss / expiry."""
     ttl = (ttl_hours if ttl_hours is not None else CFG.cache_ttl_hours) * 3600
     f = _ensure_cache_dir() / f"{_key(cmd)}.json"
     if not f.exists():
@@ -35,7 +35,7 @@ def get(cmd: list[str], ttl_hours: float | None = None) -> dict | None:
 
 
 def put(cmd: list[str], stdout: str, stderr: str, returncode: int) -> None:
-    """Кладёт результат в кеш. Не кидает исключения — кеш best-effort."""
+    """Stores a result in the cache. Never raises — the cache is best-effort."""
     try:
         f = _ensure_cache_dir() / f"{_key(cmd)}.json"
         f.write_text(
@@ -53,7 +53,7 @@ def put(cmd: list[str], stdout: str, stderr: str, returncode: int) -> None:
 
 
 def clear() -> int:
-    """Стирает весь кеш. Возвращает число удалённых файлов."""
+    """Wipes the entire cache. Returns the number of deleted files."""
     if not CACHE_DIR.exists():
         return 0
     n = 0

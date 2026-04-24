@@ -1,4 +1,4 @@
-"""Конфиг и пути к артефактам."""
+"""Config and paths to artifacts."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ _CFG_FILE = ROOT / "chat_config.json"
 
 @dataclass
 class Settings:
-    """Типизированный конфиг. Опечатка ключа = явная ошибка, не молчаливый KeyError."""
+    """Typed config. A misspelled key is an explicit error, not a silent KeyError."""
     model: str
     system_prompt: str = ""
     temperature: float = 0.7
@@ -27,11 +27,11 @@ class Settings:
 
     def __post_init__(self):
         if not self.model:
-            raise ValueError("config: 'model' обязателен")
+            raise ValueError("config: 'model' is required")
         if not 0.0 <= self.temperature <= 2.0:
-            raise ValueError(f"temperature вне [0,2]: {self.temperature}")
+            raise ValueError(f"temperature out of [0,2]: {self.temperature}")
         if not 0.0 < self.top_p <= 1.0:
-            raise ValueError(f"top_p вне (0,1]: {self.top_p}")
+            raise ValueError(f"top_p out of (0,1]: {self.top_p}")
         if self.top_k < 0:
             raise ValueError(f"top_k < 0: {self.top_k}")
         if self.max_tokens <= 0:
@@ -47,7 +47,7 @@ class Settings:
         return cls(**kwargs, extra=extra)
 
     def __getitem__(self, key: str):
-        """Обратная совместимость: CFG[key] продолжает работать как словарь."""
+        """Backward compatibility: CFG[key] still works like a dict."""
         if hasattr(self, key):
             return getattr(self, key)
         return self.extra[key]
@@ -59,15 +59,15 @@ class Settings:
             return default
 
     def __setitem__(self, key: str, value) -> None:
-        """CFG[key] = value — для runtime-флагов (hitl, notes_strict, etc.).
-        Известные поля дата-класса обновляются напрямую, остальное — в extra."""
+        """CFG[key] = value — for runtime flags (hitl, notes_strict, etc.).
+        Known dataclass fields are updated directly; everything else goes into extra."""
         if hasattr(self, key) and key != "extra":
             setattr(self, key, value)
         else:
             self.extra[key] = value
 
     def pop(self, key: str, default=None):
-        """CFG.pop(key) — удалить runtime-флаг из extra (для тестов)."""
+        """CFG.pop(key) — remove a runtime flag from extra (for tests)."""
         return self.extra.pop(key, default)
 
 
@@ -82,19 +82,19 @@ PLAN_PATH = RESEARCH_DIR / "plan.md"
 SYNTHESIS_PATH = RESEARCH_DIR / "synthesis.md"
 RUN_LOG_PATH = RESEARCH_DIR / "run.log"
 RESEARCH_MEMORY_DIR = RESEARCH_DIR / "memory"
-# Reflexion-память ГЛОБАЛЬНА — живёт между сессиями, не стирается при новом запросе
+# Reflexion memory is GLOBAL — lives across sessions, not wiped on a new query
 LESSONS_PATH = RESEARCH_DIR / "lessons.md"
 QUERYLOG_PATH = RESEARCH_DIR / "querylog.md"
-# Лог отклонённых AppendNotes (domain gate) — не теряем evidence, просто не
-# льём в KB. Для отладки: какие papers explorer принёс из смежного домена.
+# Log of rejected AppendNotes (domain gate) — evidence is not lost; we just do not
+# push to KB. For debugging: which papers the explorer dragged in from an adjacent domain.
 REJECTED_PATH = RESEARCH_DIR / "rejected.jsonl"
 
 # ── Freshness knobs ────────────────────────────────────────────────────────
-# Порог актуальности: GitHub — год, arxiv — два. Старые записи не игнорируем
-# намертво (fallback отдаёт топ с пометкой "устарело"), но в первом проходе
-# отсекаем всё что свежее порога.
+# Freshness threshold: GitHub — one year, arxiv — two. Old entries are not
+# dropped outright (the fallback still returns the top with a "stale" note), but
+# in the first pass we cut off anything older than the threshold.
 GITHUB_RECENT_DAYS = 365
 ARXIV_RECENT_DAYS = 730
-# github_search с длинным query (>5 значащих слов) почти всегда даёт 0 —
-# реджектим на входе и просим модель сократить.
+# github_search with a long query (>5 significant words) almost always returns 0 —
+# we reject on input and ask the model to shorten.
 MAX_GITHUB_QUERY_WORDS = 5

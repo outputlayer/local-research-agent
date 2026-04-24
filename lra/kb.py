@@ -1,21 +1,21 @@
 """Structured knowledge base: append-only JSONL + lightweight BM25-ish search.
 
-Каждый атом — одна строка JSON в research/kb.jsonl. Пишется параллельно с notes.md
-(notes.md остаётся человекочитаемым), KB нужен для программного поиска релевантного
-контекста по текущему [FOCUS] перед тем как уходить в новую итерацию.
+Each atom is one JSON line in research/kb.jsonl. Written in parallel with notes.md
+(notes.md stays human-readable); the KB is for programmatic lookup of relevant
+context for the current [FOCUS] before starting a new iteration.
 
-Схема атома:
-    id       — строка: arxiv-id для papers, 'owner/name' для repos
-    kind     — 'paper' | 'repo'
-    topic    — [FOCUS] на момент записи (строка)
-    title    — заголовок paper'а или owner/name
-    claim    — 1-3 предложения: что именно мы узнали и почему это важно
-    authors  — только для paper (optional)
-    url      — ссылка (optional)
-    stars    — для repo (optional)
-    lang     — для repo (optional)
-    iteration — номер итерации explorer'а
-    ts       — ISO timestamp
+Atom schema:
+    id        — string: arxiv-id for papers, 'owner/name' for repos
+    kind      — 'paper' | 'repo'
+    topic     — [FOCUS] at the time of write (string)
+    title     — paper title or owner/name
+    claim     — 1-3 sentences: what exactly we learned and why it matters
+    authors   — papers only (optional)
+    url       — link (optional)
+    stars     — for repos (optional)
+    lang      — for repos (optional)
+    iteration — explorer iteration number
+    ts        — ISO timestamp
 """
 from __future__ import annotations
 
@@ -50,23 +50,23 @@ class Atom:
     ts: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
 
-# P8: детект metadata-коллизий — одна arxiv-id записана с разными title.
-# Признак галлюцинации / cross-contamination notes (пример из прогона:
-# 2602.10434 был "Landmine Detection" и "Engineering AI Agents" в одном kb).
-_TITLE_SIM_THRESHOLD = 0.30  # jaccard по токенам title — ниже этого = коллизия
+# P8: detect metadata collisions — a single arxiv-id written with different titles.
+# Signals hallucination / cross-contamination in notes (example from a run:
+# 2602.10434 was both "Landmine Detection" and "Engineering AI Agents" in one kb).
+_TITLE_SIM_THRESHOLD = 0.30  # jaccard over title tokens — below this = collision
 
 
 def _title_jaccard(a: str, b: str) -> float:
     ta = set((a or "").lower().split())
     tb = set((b or "").lower().split())
     if not ta or not tb:
-        return 1.0  # пустой title — не считаем коллизией
+        return 1.0  # empty title — not treated as collision
     return len(ta & tb) / len(ta | tb)
 
 
 def _find_prior_title(atom: Atom) -> str | None:
-    """Ищет в kb.jsonl предыдущую запись с тем же (kind, id) и возвращает её title.
-    None если нет записей или title пуст."""
+    """Looks up kb.jsonl for the previous entry with the same (kind, id) and returns its title.
+    None if there are no entries or the title is empty."""
     if not KB_PATH.exists():
         return None
     for ln in reversed(KB_PATH.read_text(encoding="utf-8").splitlines()):
@@ -84,12 +84,13 @@ def _find_prior_title(atom: Atom) -> str | None:
 
 
 def add(atom: Atom) -> None:
-    """Добавить атом в KB. Перед записью:
-    - Детект коллизии: если есть прежняя запись с тем же id, но существенно другой title,
-      пишем в kb_collisions.jsonl (для диагностики галлюцинаций/cross-contamination).
-    - Файл остаётся append-only; load() применяет дедуп по (kind, id)."""
+    """Append an atom to the KB. Before writing:
+    - Collision detection: if there is a prior entry with the same id but a
+      materially different title, log it to kb_collisions.jsonl (diagnostic for
+      hallucinations/cross-contamination).
+    - The file stays append-only; load() applies dedup by (kind, id)."""
     RESEARCH_DIR.mkdir(exist_ok=True)
-    # Collision detection ДО append
+    # Collision detection BEFORE append
     new_title = (atom.title or "").strip()
     if new_title:
         prior = _find_prior_title(atom)
@@ -101,8 +102,8 @@ def add(atom: Atom) -> None:
                         "prior_title": prior, "new_title": new_title,
                         "iteration": atom.iteration,
                     }, ensure_ascii=False) + "\n")
-                log.warning("kb collision %s/%s: '%s' vs '%s' (jaccard<%.2f) — возможная "
-                            "галлюцинация, запись в kb_collisions.jsonl",
+                log.warning("kb collision %s/%s: '%s' vs '%s' (jaccard<%.2f) — possible "
+                            "hallucination, logged to kb_collisions.jsonl",
                             atom.kind, atom.id, prior[:60], new_title[:60], _TITLE_SIM_THRESHOLD)
             except Exception as exc:
                 log.debug("kb collision log failed: %s", exc)
@@ -111,7 +112,7 @@ def add(atom: Atom) -> None:
 
 
 def load() -> list[dict]:
-    """Читает все атомы. Дедуп по (kind, id) — оставляем последнюю версию."""
+    """Reads all atoms. Dedup by (kind, id) — keep the last version."""
     if not KB_PATH.exists():
         return []
     seen: dict[tuple[str, str], dict] = {}
@@ -135,10 +136,10 @@ def _tokens(s: str) -> list[str]:
 
 
 def search(query: str, k: int = 5, atoms: list[dict] | None = None) -> list[dict]:
-    """BM25-lite поиск по полям claim/title/topic. Без внешних зависимостей.
+    """BM25-lite search over claim/title/topic. No external deps.
 
-    Возвращает топ-k атомов, отсортированных по убыванию релевантности.
-    Пустой query или пустая KB → [].
+    Returns the top-k atoms sorted by descending relevance.
+    Empty query or empty KB → [].
     """
     q_tokens = _tokens(query)
     if not q_tokens:
@@ -147,7 +148,7 @@ def search(query: str, k: int = 5, atoms: list[dict] | None = None) -> list[dict
     if not pool:
         return []
 
-    # docs как конкатенация ключевых полей с весами (title важнее)
+    # docs as concatenation of key fields with weights (title matters more)
     docs = []
     for a in pool:
         text = f"{a.get('title','')} {a.get('title','')} {a.get('claim','')} {a.get('topic','')}"
@@ -178,7 +179,7 @@ def search(query: str, k: int = 5, atoms: list[dict] | None = None) -> list[dict
         return s
 
     scored = [(score(d), a) for d, a in zip(docs, pool, strict=True)]
-    # Fallback: если BM25 не дал сигнала, используем простой keyword-overlap (jaccard)
+    # Fallback: if BM25 gave no signal, use plain keyword overlap (jaccard)
     if all(s == 0.0 for s, _ in scored):
         q_kw = keyword_set(query)
         scored = [
@@ -190,7 +191,7 @@ def search(query: str, k: int = 5, atoms: list[dict] | None = None) -> list[dict
 
 
 def format_atoms(atoms: list[dict]) -> str:
-    """Компактный markdown для вставки в user-message — 1 строка на атом."""
+    """Compact markdown for insertion into a user message — 1 line per atom."""
     if not atoms:
         return ""
     lines = []

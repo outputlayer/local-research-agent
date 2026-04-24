@@ -1,4 +1,4 @@
-"""Валидация arXiv-id в черновике: существование + семантическая связь с notes."""
+"""Validation of arXiv-ids in the draft: existence + semantic link with notes."""
 from __future__ import annotations
 
 import re
@@ -13,16 +13,16 @@ def validate_draft_ids(
     notes_text: str | None = None,
     run_hf_info: bool = True,
 ) -> tuple[int, list[str], list[str]]:
-    """Проверяет arXiv-id в черновике и качество их цитирования.
+    """Checks arXiv-ids in the draft and the quality of their citations.
 
-    Параметры (опциональные, для тестирования):
-      draft_text — содержимое draft.md (None → прочитать с диска)
-      notes_text — содержимое notes.md (None → прочитать с диска)
-      run_hf_info — вызывать ли `hf papers info` для внешних id (False для юнит-тестов)
+    Parameters (optional, for testing):
+      draft_text — content of draft.md (None → read from disk)
+      notes_text — content of notes.md (None → read from disk)
+      run_hf_info — whether to call `hf papers info` for external ids (False for unit tests)
 
-    Возвращает: (валидных, несуществующих, подозрительных_цитат).
-    Подозрительная цитата: id из notes, но контекст вокруг него в draft'е не пересекается
-    с фактами из notes для этого id (≥3 общих ключевых слов).
+    Returns: (valid, missing, suspicious_citations).
+    A suspicious citation: an id present in notes, but its surrounding context in
+    the draft does not overlap with facts from notes for that id (≥3 shared keywords).
     """
     if draft_text is None:
         if not DRAFT_PATH.exists():
@@ -68,10 +68,10 @@ def validate_draft_ids(
         draft_kw = keyword_set(draft_ctx) - STOPWORDS
         notes_kw = keyword_set(notes_ctx)
         overlap = draft_kw & notes_kw
-        # Порог: раньше было 3 — слишком мягко. Технический жаргон
-        # (complex-valued/adversarial/FMCW) легко даёт 3 совпадения даже при
-        # полностью выдуманном claim'е. 5 — эмпирически отсекает
-        # citation-laundering без false-positive на корректных пересказах.
+        # Threshold: used to be 3 — too lenient. Technical jargon
+        # (complex-valued/adversarial/FMCW) easily yields 3 overlaps even for a
+        # fully fabricated claim. 5 — empirically cuts off
+        # citation-laundering without false positives on correct paraphrases.
         if len(overlap) < 5:
             suspicious.append(f"{pid} (overlap={len(overlap)})")
         valid += 1

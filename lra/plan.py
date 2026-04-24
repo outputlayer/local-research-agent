@@ -1,19 +1,19 @@
-"""Структурированный план ресёрча: `plan.json` — source of truth, `plan.md` — рендер для людей/LLM.
+"""Structured research plan: `plan.json` is the source of truth, `plan.md` is the render for humans/LLMs.
 
-Модель: дерево `Task` с статусами, журнал `Revision` (аудит изменений плана),
-детерминированный `guard()` без LLM-вызовов для обнаружения тупиков/лупов/оверэкспансии.
+Model: a `Task` tree with statuses, a `Revision` journal (audit of plan changes),
+and a deterministic `guard()` (no LLM calls) for detecting deadlocks/loops/over-expansion.
 
-Интеграция:
-- `reset_plan(query)` инициализирует начальный план (3 open задачи)
-- `load()/save()` для чтения/записи plan.json; `render_md()` автоматически обновляет plan.md
-- `guard()` вызывается после каждой итерации pipeline; возвращает рекомендации
-- Инструменты `plan_add_task`/`plan_close_task`/`plan_split_task` (в `tools.py`) — единственный
-  легитимный способ модели менять структуру плана.
+Integration:
+- `reset_plan(query)` initializes the starting plan (3 open tasks)
+- `load()/save()` for reading/writing plan.json; `render_md()` updates plan.md automatically
+- `guard()` is invoked after each pipeline iteration and returns recommendations
+- Tools `plan_add_task`/`plan_close_task`/`plan_split_task` (in `tools.py`) are the only
+  legitimate way for the model to change the plan structure.
 
-Ограничения (hard caps):
-- `MAX_OPEN_TASKS` — защита от оверэкспансии (модель не может бесконечно плодить подзадачи)
-- `MAX_ATTEMPTS_PER_TASK` — после N неуспешных заходов задача авто-блокируется
-- `MAX_REVISIONS` — защита от постоянной переписи плана
+Hard caps:
+- `MAX_OPEN_TASKS` — protects against over-expansion (the model cannot spawn sub-tasks forever)
+- `MAX_ATTEMPTS_PER_TASK` — after N failed attempts the task is auto-blocked
+- `MAX_REVISIONS` — protects against constant plan rewriting
 """
 from __future__ import annotations
 
@@ -29,18 +29,18 @@ log = get_logger("plan")
 
 PLAN_JSON_PATH = RESEARCH_DIR / "plan.json"
 
-# Hard caps. Подобраны эмпирически: держим план компактным, чтобы explorer не тонул.
+# Hard caps. Picked empirically: keep the plan compact so the explorer does not drown.
 MAX_OPEN_TASKS = 8
 MAX_ATTEMPTS_PER_TASK = 3
 MAX_REVISIONS = 20
-# Если задача in_progress >= N итераций и evidence_refs пуст → инкрементим attempts.
+# If a task has been in_progress for >= N iterations with empty evidence_refs, increment attempts.
 EVIDENCE_STARVATION_ITERS = 2
 
 
-# ── Модель ────────────────────────────────────────────────────────────────
+# ── Model ────────────────────────────────────────────────────
 @dataclass
 class Task:
-    """Единица работы в плане. Дерево через `parent` (2 уровня достаточно на практике)."""
+    """A unit of work in the plan. Tree via `parent` (2 levels are enough in practice)."""
     id: str
     title: str
     status: str = "open"  # open | in_progress | done | blocked | dropped
@@ -50,13 +50,13 @@ class Task:
     evidence_refs: list[str] = field(default_factory=list)  # ["kb:id", "notes:arxiv-id"]
     created_iter: int = 0
     closed_iter: int | None = None
-    last_active_iter: int = 0  # когда последний раз эта задача была in_progress
+    last_active_iter: int = 0  # the last iteration when this task was in_progress
     note: str = ""
 
 
 @dataclass
 class Revision:
-    """Запись в аудит-логе: ПОЧЕМУ план изменился. Не для LLM — для человека и анализа."""
+    """Audit-log entry: WHY the plan changed. Not for the LLM — for humans and analysis."""
     iter: int
     action: str  # add | close | split | drop | block | unblock | redefine_goal | rotate_focus | attempt
     target: str | list[str] | None = None
@@ -70,23 +70,23 @@ class Revision:
 
 @dataclass
 class Plan:
-    """Корневой объект. Сохраняется целиком в plan.json каждый раз."""
+    """Root object. Saved entirely to plan.json every time."""
     root_goal: str
     current_focus_id: str | None = None
     tasks: list[Task] = field(default_factory=list)
     revisions: list[Revision] = field(default_factory=list)
     version: int = 1
-    # Суммарное количество ревизий за всё время (не обрезается при сохранении).
-    # В отличие от len(revisions), которое ограничено MAX_REVISIONS в save(), этот
-    # счётчик растёт монотонно и показывает реальный «возраст» плана в plan.md.
+    # Total number of revisions over the plan's lifetime (not trimmed at save).
+    # Unlike len(revisions), which is capped by MAX_REVISIONS inside save(),
+    # this counter grows monotonically and reflects the real "age" of the plan in plan.md.
     total_revisions: int = 0
-    # Core vocabulary: 8-15 specific domain terms from LLM bootstrap. Используется
-    # в двух местах: (а) domain_gate расширяет HEADER keywords этим списком —
-    # лечит слепоту gate'а когда заголовок слишком generic; (б) explorer может
-    # использовать как seed для конкретных arxiv-запросов вместо generic query.
+    # Core vocabulary: 8-15 specific domain terms from LLM bootstrap. Used
+    # in two places: (a) domain_gate extends HEADER keywords with this list —
+    # treats gate blindness when the header is too generic; (b) the explorer may
+    # use it as a seed for concrete arxiv queries instead of a generic query.
     core_vocabulary: list[str] = field(default_factory=list)
 
-    # ── Навигация ─────────────────────────────────────────────────────────
+    # ── Navigation ──────────────────────────────────────────────────────
     def get(self, task_id: str) -> Task | None:
         return next((t for t in self.tasks if t.id == task_id), None)
 
@@ -106,24 +106,24 @@ class Plan:
         return t.title if t else self.root_goal
 
     def _next_id(self, prefix: str = "T") -> str:
-        """Генерирует следующий id. Использует числовой суффикс с учётом родителя для подзадач."""
+        """Generates the next id. Uses a numeric suffix with parent awareness for sub-tasks."""
         existing = {t.id for t in self.tasks}
         n = 1
         while f"{prefix}{n}" in existing:
             n += 1
         return f"{prefix}{n}"
 
-    # ── Мутации (каждая → revision) ──────────────────────────────────────
+    # ── Mutations (each → revision) ──────────────────────────────────────
     def add_task(self, title: str, *, parent: str | None = None,
                  origin: str = "emerged", iter_: int = 0,
                  note: str = "", why: str = "") -> Task:
-        """Добавляет новую задачу. Уважает MAX_OPEN_TASKS."""
+        """Adds a new task. Respects MAX_OPEN_TASKS."""
         if len(self.open_tasks()) >= MAX_OPEN_TASKS:
             raise ValueError(
-                f"MAX_OPEN_TASKS={MAX_OPEN_TASKS} достигнут — сначала закрой/дропни "
-                f"существующие ({len(self.open_tasks())} open)")
+                f"MAX_OPEN_TASKS={MAX_OPEN_TASKS} reached — first close/drop "
+                f"existing ({len(self.open_tasks())} open)")
         if parent and not self.get(parent):
-            raise ValueError(f"parent '{parent}' не найден")
+            raise ValueError(f"parent '{parent}' not found")
         if parent:
             tid = self._child_id(parent)
         else:
@@ -131,13 +131,13 @@ class Plan:
         task = Task(id=tid, title=title.strip(), parent=parent,
                     origin=origin, created_iter=iter_, note=note)
         self.tasks.append(task)
-        self._revise(iter_, "add", tid, why or f"добавлена задача: {title[:80]}")
+        self._revise(iter_, "add", tid, why or f"added task: {title[:80]}")
         return task
 
     def _child_id(self, parent: str) -> str:
-        """Для T2 генерит T2.1, T2.2 и т.д."""
+        """For T2 generates T2.1, T2.2, etc."""
         siblings = [t.id for t in self.tasks if t.parent == parent]
-        # уже есть T2.1, T2.2 — ищем T2.N
+        # T2.1/T2.2 may exist — look for T2.N
         n = 1
         while f"{parent}.{n}" in siblings:
             n += 1
@@ -147,13 +147,13 @@ class Plan:
                    evidence: list[str] | None = None, why: str = "") -> Task:
         t = self.get(task_id)
         if not t:
-            raise ValueError(f"задача '{task_id}' не найдена")
+            raise ValueError(f"task '{task_id}' not found")
         t.status = "done"
         t.closed_iter = iter_
         if evidence:
             t.evidence_refs.extend(evidence)
-        self._revise(iter_, "close", task_id, why or "закрыта")
-        # если это был focus — обнуляем
+        self._revise(iter_, "close", task_id, why or "closed")
+        # if this was the focus — reset it
         if self.current_focus_id == task_id:
             self.current_focus_id = None
         return t
@@ -162,32 +162,32 @@ class Plan:
                    iter_: int = 0, why: str = "") -> list[Task]:
         parent = self.get(task_id)
         if not parent:
-            raise ValueError(f"задача '{task_id}' не найдена")
+            raise ValueError(f"task '{task_id}' not found")
         if not subtitles:
-            raise ValueError("subtitles пуст")
-        # превращаем parent в контейнер: open → dropped родительской «плоской» задачи
-        # чтобы не путалась с подзадачами; но сохраняем её title как заголовок ветки
+            raise ValueError("subtitles is empty")
+        # turn parent into a container: open → dropped of the parent "flat" task
+        # so it does not get confused with sub-tasks; we keep its title as the branch header
         parent.status = "dropped"
         parent.note = (parent.note + " | split-container").strip(" |")
         children: list[Task] = []
         for st in subtitles:
-            # обходим MAX_OPEN_TASKS check для split (это не экспансия, а декомпозиция)
+            # bypass MAX_OPEN_TASKS check for split (this is decomposition, not expansion)
             tid = self._child_id(task_id)
             child = Task(id=tid, title=st.strip(), parent=task_id,
                          origin=f"split_from_{task_id}", created_iter=iter_)
             self.tasks.append(child)
             children.append(child)
         self._revise(iter_, "split", [c.id for c in children],
-                     why or f"декомпозиция {task_id} на {len(children)} подзадач")
+                     why or f"decomposition of {task_id} into {len(children)} sub-tasks")
         return children
 
     def drop_task(self, task_id: str, *, iter_: int = 0, why: str = "") -> Task:
         t = self.get(task_id)
         if not t:
-            raise ValueError(f"задача '{task_id}' не найдена")
+            raise ValueError(f"task '{task_id}' not found")
         t.status = "dropped"
         t.closed_iter = iter_
-        self._revise(iter_, "drop", task_id, why or "дропнута")
+        self._revise(iter_, "drop", task_id, why or "dropped")
         if self.current_focus_id == task_id:
             self.current_focus_id = None
         return t
@@ -195,22 +195,22 @@ class Plan:
     def block_task(self, task_id: str, *, iter_: int = 0, why: str = "") -> Task:
         t = self.get(task_id)
         if not t:
-            raise ValueError(f"задача '{task_id}' не найдена")
+            raise ValueError(f"task '{task_id}' not found")
         t.status = "blocked"
-        self._revise(iter_, "block", task_id, why or "заблокирована")
+        self._revise(iter_, "block", task_id, why or "blocked")
         return t
 
     def set_focus(self, task_id: str | None, *, iter_: int = 0, why: str = "") -> None:
         if task_id is not None:
             t = self.get(task_id)
             if not t:
-                raise ValueError(f"задача '{task_id}' не найдена")
+                raise ValueError(f"task '{task_id}' not found")
             if t.status in ("done", "dropped", "blocked"):
-                raise ValueError(f"нельзя ставить фокус на {t.status} задачу")
+                raise ValueError(f"cannot focus a {t.status} task")
             t.status = "in_progress"
             t.last_active_iter = iter_
         self.current_focus_id = task_id
-        self._revise(iter_, "rotate_focus", task_id, why or "новый фокус")
+        self._revise(iter_, "rotate_focus", task_id, why or "new focus")
 
     def increment_attempts(self, task_id: str, *, iter_: int = 0, why: str = "") -> int:
         t = self.get(task_id)
@@ -218,7 +218,7 @@ class Plan:
             return 0
         t.attempts += 1
         self._revise(iter_, "attempt", task_id,
-                     why or f"попытка {t.attempts}/{MAX_ATTEMPTS_PER_TASK}")
+                     why or f"attempt {t.attempts}/{MAX_ATTEMPTS_PER_TASK}")
         return t.attempts
 
     def link_evidence(self, task_id: str, refs: list[str]) -> None:
@@ -232,7 +232,7 @@ class Plan:
     def _revise(self, iter_: int, action: str, target, why: str) -> None:
         self.revisions.append(Revision(iter=iter_, action=action, target=target, why=why))
         self.total_revisions += 1
-        # trim чтобы не распух
+        # trim so it does not balloon
         if len(self.revisions) > MAX_REVISIONS * 5:
             self.revisions = self.revisions[-MAX_REVISIONS * 3:]
 
@@ -256,7 +256,7 @@ def load(path: Path | None = None) -> Plan | None:
             total_revisions=stored_revs,
         )
     except Exception as e:
-        log.warning("plan.json повреждён (%s) — игнорируем и пересоздадим", e)
+        log.warning("plan.json is corrupted (%s) — ignoring and recreating", e)
         return None
 
 
@@ -273,13 +273,13 @@ def save(plan: Plan, path: Path | None = None) -> None:
         "revisions": [asdict(r) for r in plan.revisions[-MAX_REVISIONS:]],
     }
     p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    # рендерим markdown параллельно — ТОТ ЖЕ источник данных
+    # render markdown in parallel — SAME source of data
     render_md(plan)
 
 
 def render_md(plan: Plan, path: Path | None = None) -> None:
-    """Рендерит `plan.md` из plan.json. Формат совместим с текущими read_plan / _current_focus
-    (есть строка `[FOCUS] <title>`, секции `## [TODO]`, `## [DONE]`).
+    """Renders `plan.md` from plan.json. Format is compatible with current read_plan /
+    _current_focus (has a `[FOCUS] <title>` line, `## [TODO]`, `## [DONE]` sections).
     """
     p = path or PLAN_PATH
     focus_t = plan.focus_task()
@@ -289,8 +289,8 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
     in_prog = [t for t in plan.tasks if t.status == "in_progress"]
     done = [t for t in plan.tasks if t.status == "done"]
     blocked = [t for t in plan.tasks if t.status == "blocked"]
-    # Исключаем dropped из знаменателя — split-контейнеры и вытесненные задачи
-    # не должны делать видимый прогресс меньше реального.
+    # Exclude dropped from the denominator — split containers and
+    # displaced tasks must not make the visible progress smaller than real.
     total = len([t for t in plan.tasks if t.status != "dropped"])
     pct = int(100 * len(done) / total) if total else 0
 
@@ -298,24 +298,24 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
         f"# Plan: {plan.root_goal}",
         "",
     ]
-    # Core vocabulary (если задан) — сразу после заголовка, чтобы domain_gate
-    # мог расширить HEADER-keywords специфичными доменными терминами из LLM.
+    # Core vocabulary (if set) — right after the title so domain_gate
+    # can extend HEADER-keywords with specific domain terms from the LLM.
     if plan.core_vocabulary:
         vocab_line = "**Core vocabulary:** " + ", ".join(plan.core_vocabulary)
         lines.extend([vocab_line, ""])
     lines.extend([
         focus_line,
         "",
-        f"**Прогресс: {len(done)}/{total} done ({pct}%)** · "
+        f"**Progress: {len(done)}/{total} done ({pct}%)** · "
         f"open={len(todo)} · in_progress={len(in_prog)} · blocked={len(blocked)} · "
-        f"ревизий={plan.total_revisions}",
+        f"revisions={plan.total_revisions}",
         "",
     ])
 
-    # Digest — из последних revisions
+    # Digest — from the latest revisions
     last_rev = plan.revisions[-5:]
     if last_rev:
-        lines.append("## Digest (последние изменения плана)")
+        lines.append("## Digest (latest plan changes)")
         for r in last_rev:
             lines.append(f"- iter {r.iter}: {r.action} {r.target} — {r.why}")
         lines.append("")
@@ -333,7 +333,7 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
             tree = "  " if t.parent else ""
             lines.append(f"- {tree}{pfx}{t.title}")
     else:
-        lines.append("(пусто — план исчерпан)")
+        lines.append("(empty — plan exhausted)")
         lines.append("")
         lines.append("PLAN_COMPLETE")
     lines.append("")
@@ -354,26 +354,26 @@ def render_md(plan: Plan, path: Path | None = None) -> None:
     p.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-# ── Инициализация ─────────────────────────────────────────────────────────
+# ── Initialization ────────────────────────────────────────────────────────
 def reset(query: str, path: Path | None = None) -> Plan:
-    """Пересоздаёт plan.json под новый запрос. Пять стартовых open-задач + focus на первую.
+    """Recreates plan.json for a new query. Five starting open tasks + focus on the first.
 
-    Ветки подобраны так, чтобы покрывать и науку (papers/методы), и инженерию (репо/
-    бенчмарки) — это заставляет explorer делать github_search и собирать конкретные
-    метрики, а не только пересказывать абстракты.
+    Branches are chosen to cover both science (papers/methods) and engineering (repos/
+    benchmarks) — this forces the explorer to do github_search and gather concrete
+    metrics rather than only retelling abstracts.
     """
     plan = Plan(root_goal=query)
-    t1 = plan.add_task(f"{query}: обзорные статьи и ключевые архитектуры",
-                       origin="initial", iter_=0, why="seed: наука/методы")
-    plan.add_task(f"{query}: реализации и open-source репозитории (★≥10)",
-                  origin="initial", iter_=0, why="seed: инженерия/reuse")
-    plan.add_task(f"{query}: бенчмарки и численные метрики (SR, accuracy, E2E)",
+    t1 = plan.add_task(f"{query}: survey papers and key architectures",
+                       origin="initial", iter_=0, why="seed: science/methods")
+    plan.add_task(f"{query}: implementations and open-source repositories (★≥10)",
+                  origin="initial", iter_=0, why="seed: engineering/reuse")
+    plan.add_task(f"{query}: benchmarks and numeric metrics (SR, accuracy, E2E)",
                   origin="initial", iter_=0, why="seed: evaluation")
-    plan.add_task(f"{query}: ограничения и failure modes",
+    plan.add_task(f"{query}: limitations and failure modes",
                   origin="initial", iter_=0, why="seed: critical view")
-    plan.add_task(f"{query}: открытые вопросы и направления",
+    plan.add_task(f"{query}: open questions and directions",
                   origin="initial", iter_=0, why="seed: gaps")
-    plan.set_focus(t1.id, iter_=0, why="начальный фокус")
+    plan.set_focus(t1.id, iter_=0, why="initial focus")
     save(plan, path=path)
     return plan
 
@@ -381,19 +381,19 @@ def reset(query: str, path: Path | None = None) -> Plan:
 def bootstrap_from_seeds(query: str, seeds: list[dict], topic_type: str = "mixed",
                          core_vocabulary: list[str] | None = None,
                          path: Path | None = None) -> Plan | None:
-    """Инициализирует plan.json из LLM-сгенерированных seed-задач.
+    """Initializes plan.json from LLM-generated seed tasks.
 
-    `seeds` — список dict c ключами `title` и `why` (опц). Должно быть 3-6 валидных
-    элементов, иначе возвращаем None (caller упадёт на статический reset()).
-    `topic_type` пишется в root_goal для трассируемости.
-    `core_vocabulary` — 8-15 доменных терминов от LLM, усиливают domain_gate
-    когда заголовок generic (аккуратная фильтрация: len≥4, не в STOPWORDS).
+    `seeds` — a list of dicts with keys `title` and `why` (optional). Must be 3-6 valid
+    items; otherwise returns None (the caller falls back to static reset()).
+    `topic_type` is stored in root_goal for traceability.
+    `core_vocabulary` — 8-15 LLM-provided domain terms that reinforce domain_gate
+    when the header is generic (careful filtering: len≥4, not in STOPWORDS).
 
-    Поведенческая гарантия: если функция возвращает Plan, файл plan.json уже записан
-    и имеет ≥1 open-задачу + установленный focus. Если возвращает None — ни один файл
-    не тронут (caller должен вызвать reset()).
+    Behavioral guarantee: if the function returns a Plan, plan.json is already written
+    with ≥1 open task and an established focus. If it returns None, no file
+    is touched (the caller must invoke reset()).
     """
-    # Валидация входа — строгая, поскольку это граница "LLM → наш код"
+    # Strict input validation because this is the "LLM → our code" boundary
     if not isinstance(seeds, list) or not (3 <= len(seeds) <= 8):
         return None
     cleaned: list[tuple[str, str]] = []
@@ -402,15 +402,15 @@ def bootstrap_from_seeds(query: str, seeds: list[dict], topic_type: str = "mixed
             continue
         title = str(s.get("title", "")).strip()
         why = str(s.get("why", "")).strip() or "bootstrap"
-        # Минимальная длина заголовка — чтобы отсечь «test», «a», etc.
+        # Minimum title length — filters out "test", "a", etc.
         if 10 <= len(title) <= 200:
             cleaned.append((title, why))
     if len(cleaned) < 3:
         return None
 
-    # Санитация core_vocabulary (граница "LLM → наш код"): строки 3-40 симв
-    # (3 чтобы поймать аббревиатуры: SGD, RAG, ECM, ESM), сброс дубликатов
-    # (case-insensitive), до 15 штук. Пустой список — ок (fallback на заголовок).
+    # core_vocabulary sanitization ("LLM → our code" boundary): strings of 3-40 chars
+    # (3 to catch acronyms: SGD, RAG, ECM, ESM), dedup
+    # (case-insensitive), up to 15 entries. Empty list is fine (fallback to header).
     cv_clean: list[str] = []
     seen_lower: set[str] = set()
     for term in core_vocabulary or []:
@@ -440,24 +440,24 @@ def bootstrap_from_seeds(query: str, seeds: list[dict], topic_type: str = "mixed
 
 
 def parse_bootstrap_json(text: str) -> tuple[str, list[dict], list[str]] | None:
-    """Парсит вывод INITIAL_PLANNER_PROMPT. Толерантен к ```json-ограде и префиксам.
+    """Parses INITIAL_PLANNER_PROMPT output. Tolerant of ```json fences and prefixes.
 
-    Возвращает (topic_type, seeds, core_vocabulary) или None если JSON невалиден/пуст.
-    core_vocabulary опционален (может быть пустым для обратной совместимости).
+    Returns (topic_type, seeds, core_vocabulary) or None if JSON is invalid/empty.
+    core_vocabulary is optional (may be empty for backward compatibility).
     """
     if not text:
         return None
-    # Убираем распространённые обёртки: ```json ... ``` или ``` ... ```
+    # Strip common wrappers: ```json ... ``` or ``` ... ```
     stripped = text.strip()
     if stripped.startswith("```"):
-        # режем первую и последнюю fenced-строку
+        # drop first and last fenced lines
         lines = stripped.splitlines()
         if lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         stripped = "\n".join(lines).strip()
-    # Находим первую `{` и последнюю `}` — даже если LLM наговорил вокруг
+    # Find the first `{` and last `}` — even if the LLM narrates around them
     lb = stripped.find("{")
     rb = stripped.rfind("}")
     if lb < 0 or rb <= lb:
@@ -489,7 +489,7 @@ def parse_bootstrap_json(text: str) -> tuple[str, list[dict], list[str]] | None:
 # ── Guard ─────────────────────────────────────────────────────────────────
 @dataclass
 class GuardReport:
-    """Рекомендации детерминированного watchdog'а. LLM не вовлечён."""
+    """Recommendations of the deterministic watchdog. No LLM is involved."""
     iter: int
     halt: bool = False
     halt_reason: str = ""
@@ -517,59 +517,59 @@ def guard(plan: Plan, iter_: int, *,
           notes_grew: int = 0, new_ids: int = 0,
           focus_unchanged_streak: int = 0,
           empty_iter_streak: int = 0) -> GuardReport:
-    """Детерминированный надзиратель. Работает ПОСЛЕ итерации.
+    """Deterministic watchdog. Runs AFTER an iteration.
 
-    Сигналы от pipeline:
-    - notes_grew: сколько символов добавил explorer за итерацию
-    - new_ids: сколько новых arxiv-id обнаружено
-    - focus_unchanged_streak: сколько итераций подряд тот же focus
-    - empty_iter_streak: сколько итераций подряд notes не росли
+    Signals from the pipeline:
+    - notes_grew: how many characters the explorer appended this iteration
+    - new_ids: how many new arxiv-ids were found
+    - focus_unchanged_streak: how many consecutive iterations kept the same focus
+    - empty_iter_streak: how many consecutive iterations the notes did not grow
 
-    Действия (в порядке):
-    1. Текущему focus'у инкрементим attempts если итерация оказалась «пустой»
-    2. Если attempts у focus достигли предела → блокируем, снимаем фокус
-    3. Если focus_unchanged_streak >= 3 И у задачи есть attempts → блокируем
-    4. Если все open/in_progress задачи blocked/dropped → halt
+    Actions (in order):
+    1. Increment attempts on the current focus if the iteration was "empty"
+    2. If focus attempts reach the cap → block it and clear focus
+    3. If focus_unchanged_streak >= 3 AND the task has attempts → block it
+    4. If all open/in_progress tasks are blocked/dropped → halt
     """
     report = GuardReport(iter=iter_)
     focus = plan.focus_task()
 
-    # 1. Учёт пустой итерации
+    # 1. Account for an empty iteration
     if focus and notes_grew < 100 and new_ids == 0:
         attempts = plan.increment_attempts(focus.id, iter_=iter_,
-                                           why="итерация без прироста notes/ids")
+                                           why="iteration without notes/ids growth")
         report.warnings.append(f"{focus.id}: attempts={attempts}")
         if attempts >= MAX_ATTEMPTS_PER_TASK:
             plan.block_task(focus.id, iter_=iter_,
-                            why=f"исчерпаны попытки ({MAX_ATTEMPTS_PER_TASK})")
+                            why=f"attempts exhausted ({MAX_ATTEMPTS_PER_TASK})")
             report.blocked_ids.append(focus.id)
             plan.current_focus_id = None
 
-    # 2. Стагнация фокуса — даже если росло чуть-чуть, но ID не появились
+    # 2. Focus stagnation — even if there was a tiny growth, no new IDs appeared
     if focus and focus_unchanged_streak >= 3 and empty_iter_streak >= 2:
         if focus.status != "blocked":
             plan.block_task(focus.id, iter_=iter_,
-                            why=f"фокус не меняется {focus_unchanged_streak} итераций")
+                            why=f"focus has not changed for {focus_unchanged_streak} iterations")
             report.blocked_ids.append(focus.id)
             plan.current_focus_id = None
 
-    # 3. Авто-ротация: если focus пуст но open ещё есть
+    # 3. Auto-rotation: if focus is empty but open tasks remain
     if plan.current_focus_id is None and plan.open_tasks():
-        # берём первую open (не in_progress)
+        # pick the first open (non in_progress) task
         next_t = next((t for t in plan.tasks if t.status == "open"), None)
         if next_t:
             plan.set_focus(next_t.id, iter_=iter_,
-                           why="авто-ротация после блокировки/закрытия предыдущего")
+                           why="auto-rotation after blocking/closing the previous focus")
             report.rotated_focus = True
 
-    # 4. Halt-условия
+    # 4. Halt conditions
     if not plan.open_tasks():
         report.halt = True
         report.halt_reason = "ALL_DONE_OR_BLOCKED"
     elif empty_iter_streak >= 4:
-        # Глобальный halt: ≥4 итерации подряд без прироста notes/ids,
-        # вне зависимости от фокуса. Защита от случая когда auto-ротация
-        # исправно меняет фокус, но ни один не приносит результатов.
+        # Global halt: ≥4 iterations in a row with no growth in notes/ids,
+        # regardless of focus. Protection from the case where auto-rotation
+        # dutifully rotates focus but none of them yields any results.
         report.halt = True
         report.halt_reason = f"GLOBAL_EMPTY_STREAK({empty_iter_streak})"
 
@@ -577,13 +577,13 @@ def guard(plan: Plan, iter_: int, *,
     return report
 
 
-# ── Sync с plan.md (обратная совместимость с write_plan / _rotate_focus_fallback) ──
+# ── Sync with plan.md (backward compatibility with write_plan / _rotate_focus_fallback) ──
 def sync_focus_from_md(plan: Plan, md_text: str, *, iter_: int = 0) -> bool:
-    """Если write_plan изменил plan.md (legacy-путь replanner'а), пытаемся согласовать
-    фокус с plan.json. Best-effort: ищем строку `[FOCUS] <text>` и если текст НЕ совпадает
-    с текущим focus_task().title, создаём новую `corrective` задачу и ставим её в фокус.
+    """If write_plan changed plan.md (the replanner legacy path), try to reconcile
+    focus with plan.json. Best-effort: look for `[FOCUS] <text>` and if the text does NOT match
+    the current focus_task().title, create a new `corrective` task and give it focus.
 
-    Возвращает True если применили корректировку.
+    Returns True if a correction was applied.
     """
     focus_line = ""
     for ln in md_text.splitlines():
@@ -593,8 +593,8 @@ def sync_focus_from_md(plan: Plan, md_text: str, *, iter_: int = 0) -> bool:
             break
     if not focus_line:
         return False
-    # Sentinel: replanner объявил план исчерпанным — закрываем все open/in_progress задачи
-    # чтобы render_md показал PLAN_COMPLETE и guard сигналил halt.
+    # Sentinel: replanner declared the plan exhausted — close all open/in_progress tasks
+    # so render_md shows PLAN_COMPLETE and guard signals halt.
     if focus_line.strip().upper() == "PLAN_COMPLETE":
         changed = False
         for t in plan.tasks:
@@ -605,25 +605,25 @@ def sync_focus_from_md(plan: Plan, md_text: str, *, iter_: int = 0) -> bool:
     current_title = plan.focus_title().strip()
     if focus_line == current_title:
         return False
-    # Ищем существующую task с таким же title — если есть, ставим на неё фокус
+    # Look for an existing task with the same title — if found, focus on it
     match = next((t for t in plan.tasks
                   if t.title == focus_line and t.status not in ("done", "dropped", "blocked")), None)
     if match:
-        plan.set_focus(match.id, iter_=iter_, why="sync с plan.md (write_plan)")
+        plan.set_focus(match.id, iter_=iter_, why="sync with plan.md (write_plan)")
         return True
-    # Иначе — создаём corrective задачу (обходим MAX_OPEN_TASKS мягко: если лимит, всё равно добавляем)
+    # Otherwise — create a corrective task (bypass MAX_OPEN_TASKS softly: add anyway at the limit)
     try:
         new_t = plan.add_task(focus_line, origin="corrective", iter_=iter_,
-                              why="replanner выставил новый FOCUS через write_plan")
+                              why="replanner set a new FOCUS via write_plan")
     except ValueError:
-        # лимит — дропаем самую старую open задачу без evidence
+        # limit reached — drop the oldest open task without evidence
         stale = next((t for t in plan.tasks
                       if t.status == "open" and not t.evidence_refs), None)
         if stale:
-            plan.drop_task(stale.id, iter_=iter_, why="вытеснена corrective задачей (лимит open)")
+            plan.drop_task(stale.id, iter_=iter_, why="displaced by a corrective task (open limit)")
             new_t = plan.add_task(focus_line, origin="corrective", iter_=iter_,
-                                  why="replanner выставил новый FOCUS (после дропа stale)")
+                                  why="replanner set a new FOCUS (after dropping stale)")
         else:
             return False
-    plan.set_focus(new_t.id, iter_=iter_, why="новый corrective фокус")
+    plan.set_focus(new_t.id, iter_=iter_, why="new corrective focus")
     return True

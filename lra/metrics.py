@@ -1,6 +1,6 @@
-"""Метрики итераций: сколько времени, сколько id прибавилось, сходимость критика.
+"""Iteration metrics: timing, id growth, critic convergence.
 
-Экспортируются в research/metrics.json для внешней аналитики и integration-тестов.
+Exported to research/metrics.json for external analytics and integration tests.
 """
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ _SPECULATION_MARKERS = (
     "hypothetical",
     "insufficient evidence",
     "extrapolation",
-    "следующим логическим шагом",
-    "гипотетичес",
+    "next logical step",
+    "speculative",
 )
 
 
@@ -75,7 +75,7 @@ class RunMetrics:
         return end - self.started_at
 
     def finish(self, path: Path | None = None) -> Path:
-        """Сохраняет метрики в JSON. Вызывается в конце research_loop."""
+        """Saves metrics to JSON. Called at the end of research_loop."""
         self.finished_at = time.time()
         target = path or METRICS_PATH
         target.parent.mkdir(exist_ok=True)
@@ -87,7 +87,7 @@ class RunMetrics:
 
 
 def summarize_evidence_quality(draft_text: str, notes_text: str, *, valid_ids: int = 0) -> dict[str, int | float]:
-    """Считает простые quality metrics по draft+notes без внешних вызовов."""
+    """Counts simple quality metrics over draft+notes without external calls."""
     cited_ids = extract_ids(draft_text or "")
     cited_repos = {m.group(1).strip() for m in _REPO_CITATION_RE.finditer(draft_text or "")}
 
@@ -117,22 +117,22 @@ def summarize_evidence_quality(draft_text: str, notes_text: str, *, valid_ids: i
     }
 
 
-# ---- Парсинг критического ответа для точной конвергенции ----
+# ---- Parsing the critic response for precise convergence ----
 
 _ISSUE_MARKERS = (
-    "нет цитаты", "отсутствует в notes", "противоречит notes",
-    "дублирование", "SMART_PLAGIARISM", "Novel Insights",
+    "no citation", "missing from notes", "contradicts notes",
+    "duplication", "SMART_PLAGIARISM", "Novel Insights",
 )
 _ACTION_RE = re.compile(r"^\s*(?:[\-\*]|\d+[\.\)])\s+", re.MULTILINE)
 
 
 def count_critic_issues(text: str) -> int:
-    """Оценивает число конкретных правок в ответе критика.
+    """Estimates the number of concrete edits in the critic response.
 
-    Стратегия:
-    - если есть APPROVED — 0.
-    - иначе считаем bullet/numbered-пункты; если их нет, считаем упоминания маркеров проблем.
-    Капаем на 10, чтобы не реагировать на шум.
+    Strategy:
+    - if APPROVED is present — return 0.
+    - otherwise count bullet/numbered items; if none, count occurrences of issue markers.
+    Capped at 10 so we do not overreact to noise.
     """
     if not text:
         return 0

@@ -1,14 +1,13 @@
-"""Loop detection для tool calls.
+"""Loop detection for tool calls.
 
-Мотивация (run.log 14:37-15:41): 9B Qwen застрял в петле на `compact_notes`,
-делая 16 вызовов подряд с тем же контентом. Каждая итерация модель
-дополнительно сериализовала params как строку, накапливая `\\\\\\\"` escape'ы —
-прогрессивная деградация без шанса выйти.
+Motivation (run.log 14:37-15:41): the 9B Qwen got stuck on `compact_notes`,
+issuing 16 calls in a row with the same content. Each iteration the model
+additionally serialized the params as a string, accumulating `\\\\\\\"` escapes —
+progressive degradation with no chance to escape.
 
-Детектор детерминированно блокирует N-ный подряд вызов одного и того же
-tool'а с одинаковыми params (хеш SHA1 от нормализованной строки). Сам
-факт блокировки возвращается как текстовая ошибка — LLM видит её и должен
-сменить стратегию.
+The detector deterministically blocks the N-th consecutive call to the same
+tool with identical params (SHA1 hash of the normalized string). The block
+itself is returned as a text error — the LLM sees it and must change strategy.
 """
 from __future__ import annotations
 
@@ -16,18 +15,18 @@ import hashlib
 import json
 from collections import deque
 
-# Порог: если последние N вызовов все одинаковы → блок. Берём 3 — это
-# "первый вызов ок, повтор ок (модель могла не увидеть результат), третий
-# подряд идентичный — явный loop".
+# Threshold: if the last N calls are all identical → block. We take 3 —
+# "first call ok, repeat ok (the model may have missed the result), third
+# identical call in a row — an obvious loop".
 _MAX_REPEATS = 3
-_HISTORY_LEN = 32  # больше не нужно, scan только последних _MAX_REPEATS
+_HISTORY_LEN = 32  # not strictly needed; scan only the last _MAX_REPEATS
 
 
 class ToolCallTracker:
-    """Track последних tool calls и блокирует repeats.
+    """Tracks the most recent tool calls and blocks repeats.
 
-    Потокобезопасности не гарантирует — qwen-agent вызывает tools
-    последовательно, GIL-защиты достаточно для deque.
+    No thread-safety guarantee — qwen-agent invokes tools sequentially,
+    the GIL is enough to protect the deque.
     """
 
     def __init__(self, max_repeats: int = _MAX_REPEATS) -> None:
@@ -37,23 +36,23 @@ class ToolCallTracker:
         self._max_per_tool: dict[str, int] = {}
 
     def set_budget(self, tool_name: str, max_calls: int) -> None:
-        """Устанавливает максимальное кол-во вызовов tool за сессию.
+        """Sets the maximum number of tool calls per session.
 
-        Независимо от identical-params детектора. Используется для
-        compact_notes — прогрессивная loop (разные params каждый раз из-за
-        накапливающихся escape'ов) не ловится identical-check'ом.
+        Independent of the identical-params detector. Used for
+        compact_notes — a progressive loop (different params each time due to
+        accumulating escapes) is not caught by the identical-check.
         """
         self._max_per_tool[tool_name] = max_calls
 
     @staticmethod
     def _hash_params(params) -> str:
-        """Нормализует params (dict/str/bytes) в короткий стабильный хеш.
+        """Normalizes params (dict/str/bytes) into a short stable hash.
 
-        Ключ: model иногда даёт params как JSON-строку, иногда как уже
-        распарсенный dict — оба варианта должны хешироваться одинаково.
+        Key point: the model sometimes sends params as a JSON string,
+        sometimes as an already parsed dict — both variants must hash equally.
         """
         if isinstance(params, str):
-            # попробуем распарсить JSON, чтобы {"a":1}/{"a": 1} дали одинаковый хеш
+            # try to parse JSON so that {"a":1}/{"a": 1} produce the same hash
             s = params.strip()
             try:
                 obj = json.loads(s)
@@ -68,24 +67,24 @@ class ToolCallTracker:
         return hashlib.sha1(s.encode("utf-8", errors="replace")).hexdigest()[:12]
 
     def check(self, tool_name: str, params) -> tuple[bool, int]:
-        """Регистрирует вызов, возвращает (allowed, repeat_count).
+        """Registers a call, returns (allowed, repeat_count).
 
-        repeat_count — сколько раз этот же (tool+params) встретился в
-        последних `max_repeats` слотах ВКЛЮЧАЯ текущий вызов.
-        allowed=False если repeat_count >= max_repeats ИЛИ превышён
-        set_budget лимит для данного tool.
+        repeat_count — how many times this same (tool+params) was seen in
+        the last `max_repeats` slots INCLUDING the current call.
+        allowed=False if repeat_count >= max_repeats OR the set_budget
+        limit for this tool is exceeded.
         """
         key = f"{tool_name}:{self._hash_params(params)}"
-        # смотрим последние (max_repeats - 1) записей — если все они
-        # совпадают с текущим ключом, то этот вызов будет max_repeats-м
-        # подряд одинаковым → блок.
+        # look at the last (max_repeats - 1) entries — if they all match
+        # the current key, then this call will be the max_repeats-th
+        # identical call in a row → block.
         window = list(self.history)[-(self.max_repeats - 1):]
         repeat_count = 1 + sum(1 for k in window if k == key)
-        # Проверка per-tool бюджета (total calls за сессию).
+        # Per-tool budget check (total calls per session).
         total = self._call_totals.get(tool_name, 0) + 1
         budget = self._max_per_tool.get(tool_name)
         if budget is not None and total > budget:
-            # Не добавляем в историю (вызов заблокирован).
+            # Do not append to history (the call is blocked).
             return False, repeat_count
         allowed = repeat_count < self.max_repeats
         if allowed:
@@ -96,24 +95,24 @@ class ToolCallTracker:
     def reset(self) -> None:
         self.history.clear()
         self._call_totals.clear()
-        # _max_per_tool — не сбрасываем: бюджеты задаются один раз при старте
+        # _max_per_tool — do not reset: budgets are set once at startup
 
 
-# Глобальный singleton, сбрасывается между прогонами через reset_tracker().
-# Тесты могут заменить через monkeypatch.setattr(tool_tracker, "_TRACKER", ...).
+# Global singleton, reset between runs via reset_tracker().
+# Tests can swap it via monkeypatch.setattr(tool_tracker, "_TRACKER", ...).
 _TRACKER = ToolCallTracker()
 
 
 def check_call(tool_name: str, params) -> tuple[bool, int]:
-    """Публичное API — делегирует в глобальный tracker."""
+    """Public API — delegates to the global tracker."""
     return _TRACKER.check(tool_name, params)
 
 
 def set_tool_budget(tool_name: str, max_calls: int) -> None:
-    """Устанавливает максимальный бюджет вызовов за сессию для tool_name."""
+    """Sets the maximum per-session call budget for tool_name."""
     _TRACKER.set_budget(tool_name, max_calls)
 
 
 def reset_tracker() -> None:
-    """Сброс между прогонами (вызывается в research_loop / resume_research)."""
+    """Reset between runs (called in research_loop / resume_research)."""
     _TRACKER.reset()

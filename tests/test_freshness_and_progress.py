@@ -158,7 +158,7 @@ def test_render_md_shows_progress_counts(tmp_path, monkeypatch):
     plan_mod.save(plan)
 
     text = md.read_text(encoding="utf-8")
-    assert "Прогресс:" in text
+    assert "Progress:" in text
     assert "2/5 done" in text or "done (40%)" in text
     assert "blocked=1" in text
 

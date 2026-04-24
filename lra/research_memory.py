@@ -1,4 +1,4 @@
-"""Файловая cross-session память для ресёрча: короткие типизированные заметки."""
+"""File-based cross-session research memory: short typed notes."""
 from __future__ import annotations
 
 import re
@@ -59,7 +59,7 @@ def save_memory(
     topic: str = "",
     tags: list[str] | None = None,
 ) -> Path:
-    """Сохраняет memory entry в отдельный markdown-файл."""
+    """Saves a memory entry to a separate markdown file."""
     ensure_memory_dir()
     now = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
     entry = MemoryEntry(
@@ -115,7 +115,7 @@ def load_memories() -> list[MemoryEntry]:
 
 
 def select_relevant_memories(query: str, k: int = 3) -> list[MemoryEntry]:
-    """Возвращает top-k memory entries по query; селектор намеренно консервативный."""
+    """Returns the top-k memory entries for a query; the selector is deliberately conservative."""
     q_kws = keyword_set(query)
     if not q_kws:
         return []
@@ -163,7 +163,7 @@ def record_run_memory(
     suspicious_citations: list[str],
     lessons_tail: str = "",
 ) -> Path:
-    """Короткая запись о том, что помогло или помешало в прогоне."""
+    """Short note about what helped or hindered the run."""
     quality = [
         f"valid_ids={valid_ids}",
         f"invalid_ids={len(invalid_ids)}",

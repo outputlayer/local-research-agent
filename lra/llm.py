@@ -1,4 +1,4 @@
-"""MLX-бэкенд для qwen-agent. Модель кешируется глобально."""
+"""MLX backend for qwen-agent. The model is cached globally."""
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -9,7 +9,7 @@ from qwen_agent.llm.schema import ASSISTANT, Message
 
 from .config import CFG
 
-# Глобальный кеш весов — чтобы несколько Assistant не грузили модель дважды
+# Global weights cache — so that multiple Assistants do not load the model twice
 _MLX_CACHE: dict[str, tuple] = {}
 
 
@@ -22,7 +22,7 @@ def get_mlx(model_name: str):
 
 @register_llm("mlx")
 class MlxLLM(BaseFnCallModel):
-    """Локальный MLX-бэкенд для Qwen-Agent."""
+    """Local MLX backend for Qwen-Agent."""
 
     def __init__(self, cfg: dict | None = None):
         super().__init__(cfg)
