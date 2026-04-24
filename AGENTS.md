@@ -1,104 +1,104 @@
 # AGENTS.md
 
-Контракт для AI-агентов (GitHub Copilot / Claude Code / любой qwen-agent host), которые
-будут работать в этом репо. Читать **в начале каждой сессии**. Дополняет `context.md`
-(структура кода) и `README.md` (пользовательский интерфейс).
+Contract for AI agents (GitHub Copilot / Claude Code / any qwen-agent host) that
+will work in this repo. Read **at the start of every session**. Complements `context.md`
+(code structure) and `README.md` (user interface).
 
-## Что это за проект (одна фраза)
+## What is this project (one sentence)
 
-Локальный research-агент на MLX + Qwen-Agent: одна команда → многостадийный pipeline
-(explorer → replanner → synthesizer → writer ↔ critic → validator) → отчёт
-`research/draft.md` с верифицированными arxiv-цитатами.
+A local research agent on MLX + Qwen-Agent: one command → multi-stage pipeline
+(explorer → replanner → synthesizer → writer ↔ critic → validator) → report
+`research/draft.md` with verified arxiv citations.
 
-## Инварианты — НИКОГДА не нарушай
+## Invariants — NEVER violate
 
-| # | Запрет | Причина |
+| # | Prohibition | Reason |
 |---|---|---|
-| 1 | Не удалять `research/lessons.md` и `research/querylog.md` при `/clean` | Reflexion-память кросс-сессионная — её стирает только `/forget` |
-| 2 | Не писать в `AppendNotes` arxiv-id, которого НЕТ в `kb.jsonl` (pre-append verifier)| Explorer иначе галлюцинирует ссылки |
-| 3 | Не добавлять `shell=True` в `subprocess.run` | Все внешние CLI (`hf`, `gh`) запускаются через argv-list в `lra/cli.py` |
-| 4 | Не менять `CRITIC_PROMPT` / `FACT_CRITIC_PROMPT` / `STRUCTURE_CRITIC_PROMPT` текст без одобрения | Пороги качества откалиброваны на текущие версии |
-| 5 | Не коммитить файлы в `.skills/`, `.cache/`, `research/archive/` | Всё в `.gitignore`; сторонние скиллы и кэши |
-| 6 | Не вызывать `print(...)` в библиотечном коде `lra/*.py` (кроме явных фаз пайплайна) | Логирование через `lra/logger.py`, чтобы не мешало pytest capture |
+| 1 | Do not delete `research/lessons.md` and `research/querylog.md` on `/clean` | Reflexion memory is cross-session — only `/forget` clears it |
+| 2 | Do not write to `AppendNotes` an arxiv-id that is NOT in `kb.jsonl` (pre-append verifier)| Otherwise the explorer hallucinates references |
+| 3 | Do not add `shell=True` to `subprocess.run` | All external CLIs (`hf`, `gh`) are invoked via argv-list in `lra/cli.py` |
+| 4 | Do not change the text of `CRITIC_PROMPT` / `FACT_CRITIC_PROMPT` / `STRUCTURE_CRITIC_PROMPT` without approval | Quality thresholds are calibrated to the current versions |
+| 5 | Do not commit files in `.skills/`, `.cache/`, `research/archive/` | All in `.gitignore`; third-party skills and caches |
+| 6 | Do not call `print(...)` in library code `lra/*.py` (except explicit pipeline phases) | Logging goes through `lra/logger.py` so it does not interfere with pytest capture |
 
-## Инварианты — ВСЕГДА делай
+## Invariants — ALWAYS do
 
-| # | Требование | Команда верификации |
+| # | Requirement | Verification command |
 |---|---|---|
-| A | Перед коммитом: `ruff check lra tests agent.py` → `All checks passed!` | `ruff check lra tests agent.py` |
-| B | Перед коммитом: `pytest -q` → `162 passed` (или выше) | `source .venv/bin/activate && python -m pytest -q` |
-| C | Новый @register_tool → добавить тест в `tests/` | `ls tests/test_*.py` |
-| D | Рефактор поведенчески-нейтральный → 4-check по refactor-verify SKILL | см. `.skills/vibesubin/plugins/vibesubin/skills/refactor-verify/SKILL.md` |
-| E | Новый CFG-флаг → добавить в `lra/config.py` и документировать в этом файле ниже | `grep CFG.get lra/*.py` |
+| A | Before commit: `ruff check lra tests agent.py` → `All checks passed!` | `ruff check lra tests agent.py` |
+| B | Before commit: `pytest -q` → `257 passed` (or higher) | `source .venv/bin/activate && python -m pytest -q` |
+| C | New @register_tool → add a test in `tests/` | `ls tests/test_*.py` |
+| D | Behavior-neutral refactor → 4-check via the refactor-verify SKILL | see `.skills/vibesubin/plugins/vibesubin/skills/refactor-verify/SKILL.md` |
+| E | New CFG flag → add it in `lra/config.py` and document it below in this file | `grep CFG.get lra/*.py` |
 
-## Trade-offs — уже решено, не переоткрывать
+## Trade-offs — already decided, do not reopen
 
-- **`tools.py` = один файл 689 LOC**: split в `tools/` package отложен — 14 monkeypatch в тестах прицеплены к `lra.tools.*` атрибутам, ROI низкий.
-- **`research_loop` = 171 NLOC, CCN=42**: уже разбит на `_run_iteration` / `_finalize_draft` / `_hitl_review`. Дальнейший split — линейная композиция фаз, увеличит прыжки по коду.
-- **Pinned deps через `==` exact, без lockfile**: простой CLI без автообновлений. Lockfile = over-engineering для 4 зависимостей.
-- **CRITIC_PROMPT сохранён рядом с FACT/STRUCTURE_CRITIC_PROMPT**: legacy-режим `specialized_critics=False`, нужен для совместимости с resume.
+- **`tools.py` = single 689 LOC file**: a split into a `tools/` package is deferred — 14 monkeypatches in tests are attached to `lra.tools.*` attributes, ROI is low.
+- **`research_loop` = 171 NLOC, CCN=42**: already split into `_run_iteration` / `_finalize_draft` / `_hitl_review`. Further splitting is linear phase composition and would increase code jumps.
+- **Pinned deps via `==` exact, no lockfile**: simple CLI without auto-updates. A lockfile is over-engineering for 4 dependencies.
+- **`CRITIC_PROMPT` kept alongside `FACT/STRUCTURE_CRITIC_PROMPT`**: legacy mode `specialized_critics=False`, needed for resume compatibility.
 
-## Как работать с этим кодом
+## How to work with this code
 
-### Запуск тестов
+### Running tests
 ```bash
 source .venv/bin/activate
 python -m pytest -q
 ```
-Все 162 теста — без MLX, ~1 секунда.
+All 257 tests — no MLX, ~1 second.
 
-### Запуск агента
+### Running the agent
 ```bash
 source .venv/bin/activate
-python agent.py          # интерактивный REPL
-# или: python -c "from lra.pipeline import research_loop; research_loop('тема', depth=6, critic_rounds=2)"
+python agent.py          # interactive REPL
+# or: python -c "from lra.pipeline import research_loop; research_loop('topic', depth=6, critic_rounds=2)"
 ```
 
-### Резюм после краша
+### Resume after a crash
 ```bash
 python -c "from lra.pipeline import resume_research; resume_research()"
 ```
-Пропустит explorer, продолжит с synthesizer → writer → critic → validator, используя
-существующие `notes.md`/`kb.jsonl`.
+Skips the explorer, continues from synthesizer → writer → critic → validator, using
+existing `notes.md`/`kb.jsonl`.
 
-### Runtime-флаги (в `chat_config.json` под ключом `extra` ИЛИ `CFG['flag'] = True` в REPL)
+### Runtime flags (in `chat_config.json` under the `extra` key OR `CFG['flag'] = True` in the REPL)
 
-| Флаг | Default | Что делает |
+| Flag | Default | What it does |
 |---|---|---|
-| `notes_strict` | `True` | Pre-append verifier блокирует AppendNotes на неизвестных arxiv-id |
-| `strict_domain_gate` | `True` | Two-tier gate в AppendNotes и hf_papers kb auto-save: требует ≥2 overlap с HEADER из plan.md (первая строка `# Plan:`). Seeds из [Tn]-задач дрейфуют и используются только для диагностики причины в `rejected.jsonl` (`reason`: `no_core_hit` / `weak_overlap`). Slow-start: если в header <2 специфичных kws, gate пропускает. |
-| `specialized_critics` | `True` | Fact-critic + structure-critic вместо combined `CRITIC_PROMPT` |
-| `dynamic_initial_plan` | `True` | LLM-bootstrap topic-aware seeds перед Phase 1; fallback на статический 5-seed plan при любой ошибке парсинга/LLM |
-| `hitl` | `False` | Human-in-the-loop пауза после validator'а (REPL: `/hitl on`) |
-| `iter_wall_clock_limit_s` | `900` | P10: если итерация длилась > N секунд (prefetch+explorer+replanner), halt с `stopped_early_reason=ITER_WALL_CLOCK`. Установи `0` чтобы выключить. |
-| `max_agent_turns` | `24` | P11: max tool-loop turns в одном `_run_agent`. Защита от MLX pathological ReACT-петель. `0` выключает. |
-| `agent_call_wall_clock_s` | `420` | P11: max wall-clock seconds на один `_run_agent`-вызов. `0` выключает. |
+| `notes_strict` | `True` | Pre-append verifier blocks AppendNotes on unknown arxiv-ids |
+| `strict_domain_gate` | `True` | Two-tier gate in AppendNotes and hf_papers kb auto-save: requires ≥2 overlap with HEADER from plan.md (the first line `# Plan:`). Seeds from [Tn] tasks drift and are used only for diagnosing the reason in `rejected.jsonl` (`reason`: `no_core_hit` / `weak_overlap`). Slow-start: if the header has <2 specific kws, the gate lets it through. |
+| `specialized_critics` | `True` | Fact-critic + structure-critic instead of combined `CRITIC_PROMPT` |
+| `dynamic_initial_plan` | `True` | LLM-bootstrap of topic-aware seeds before Phase 1; falls back to a static 5-seed plan on any parse/LLM error |
+| `hitl` | `False` | Human-in-the-loop pause after the validator (REPL: `/hitl on`) |
+| `iter_wall_clock_limit_s` | `900` | P10: if an iteration lasted > N seconds (prefetch+explorer+replanner), halt with `stopped_early_reason=ITER_WALL_CLOCK`. Set `0` to disable. |
+| `max_agent_turns` | `24` | P11: max tool-loop turns in a single `_run_agent`. Protection against MLX pathological ReACT loops. `0` disables. |
+| `agent_call_wall_clock_s` | `420` | P11: max wall-clock seconds for a single `_run_agent` call. `0` disables. |
 
-## При любом изменении — прогон
+## On any change — run
 
 ```bash
 source .venv/bin/activate && ruff check lra tests agent.py && python -m pytest -q
 ```
 
-Если один из шагов красный — НЕ коммить. Сначала починить.
+If either step is red — DO NOT commit. Fix first.
 
-## Vibesubin skills (локальные, в `.skills/vibesubin/plugins/vibesubin/skills/`)
+## Vibesubin skills (local, in `.skills/vibesubin/plugins/vibesubin/skills/`)
 
-Для сложных задач читать SKILL.md СООТВЕТСТВУЮЩЕГО скилла ДО работы:
+For complex tasks read SKILL.md of the RELEVANT skill BEFORE starting work:
 
-| Триггер | Скилл |
+| Trigger | Skill |
 |---|---|
-| refactor / rename / split / safe delete | `refactor-verify` — обязательна 4-check верификация |
-| «проверь безопасность / секреты / уязвимости» | `audit-security` |
-| «найди мёртвый код / что удалить?» | `fight-repo-rot` |
-| написать README / commit / PR / AGENTS.md | `write-for-ai` |
+| refactor / rename / split / safe delete | `refactor-verify` — 4-check verification is mandatory |
+| "check security / secrets / vulnerabilities" | `audit-security` |
+| "find dead code / what to delete?" | `fight-repo-rot` |
+| write README / commit / PR / AGENTS.md | `write-for-ai` |
 
-См. `/memories/repo/vibesubin-skills.md` (Copilot memory) для полной таблицы.
+See `/memories/repo/vibesubin-skills.md` (Copilot memory) for the full table.
 
 ## Pointers
 
-- `context.md` — карта пакета, что где лежит, ключевые классы и функции
-- `README.md` — пользовательский интерфейс: установка, команды, фичи
-- `.skills/vibesubin/` — локальные dev-скиллы (в `.gitignore`, не коммитить)
-- `research/` — артефакты прогонов (draft.md, notes.md, plan.md, synthesis.md, kb.jsonl, metrics.json)
-- `research/archive/` — снапшоты завершённых прогонов (timestamped)
+- `context.md` — package map: what lives where, key classes and functions
+- `README.md` — user interface: install, commands, features
+- `.skills/vibesubin/` — local dev skills (in `.gitignore`, do not commit)
+- `research/` — run artifacts (draft.md, notes.md, plan.md, synthesis.md, kb.jsonl, metrics.json)
+- `research/archive/` — snapshots of finished runs (timestamped)
