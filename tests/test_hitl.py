@@ -123,9 +123,9 @@ def test_hitl_revise_triggers_one_writer_pass(patched_paths, monkeypatch):
                               valid=2, invalid=[], suspicious=[])
     finally:
         CFG.pop("hitl", None)
-    assert len(calls) == 1, f"ожидался ровно один writer-pass, получено {len(calls)}"
-    # HITL-сообщение добавлено в writer_msgs ПЕРЕД вызовом
-    assert any("HITL-КОММЕНТАРИЙ" in m.get("content", "") and
+    assert len(calls) == 1, f"expected exactly one writer-pass, got {len(calls)}"
+    # HITL message added to writer_msgs BEFORE the call
+    assert any("HITL COMMENT" in m.get("content", "") and
                "benchmarks" in m.get("content", "") for m in writer_msgs)
 
 

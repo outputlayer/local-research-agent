@@ -1,4 +1,4 @@
-"""P9: unapproved banner в draft.md когда critic ни разу не approved."""
+"""P9: unapproved banner in draft.md when the critic never approved."""
 from lra import pipeline
 from lra.pipeline import _UNAPPROVED_BANNER_MARK, _prepend_unapproved_banner
 
@@ -15,8 +15,8 @@ def test_banner_prepended_when_unapproved(tmp_path, monkeypatch):
     _prepend_unapproved_banner(4, ["2607.15491"], ["2510.26941 (overlap=3)"])
     out = path.read_text(encoding="utf-8")
     assert out.startswith(_UNAPPROVED_BANNER_MARK)
-    assert "НЕ approved" in out
-    assert "4 раундов" in out
+    assert "NOT approved" in out
+    assert "4 critic rounds" in out
     assert "2607.15491" in out
     assert "2510.26941" in out
     # Original body preserved
@@ -37,12 +37,12 @@ def test_banner_without_invalid_or_suspicious(tmp_path, monkeypatch):
     path = _set_draft(tmp_path, monkeypatch, "# R\n\nbody\n")
     _prepend_unapproved_banner(3, [], [])
     out = path.read_text(encoding="utf-8")
-    assert "НЕ approved" in out
-    assert "Галлюцинированные" not in out
-    assert "Подозрительные" not in out
+    assert "NOT approved" in out
+    assert "Hallucinated" not in out
+    assert "Suspicious" not in out
 
 
 def test_no_draft_no_op(tmp_path, monkeypatch):
-    """Нет draft.md → noop без exception."""
+    """No draft.md → noop without exception."""
     monkeypatch.setattr(pipeline, "DRAFT_PATH", tmp_path / "nope.md")
-    _prepend_unapproved_banner(2, [], [])  # не должно упасть
+    _prepend_unapproved_banner(2, [], [])  # must not raise

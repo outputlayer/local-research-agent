@@ -1,4 +1,4 @@
-"""Оркестратор пайплайна: explorer ↔ replanner → synthesizer → writer ↔ critic → validator."""
+"""Pipeline orchestrator: explorer ↔ replanner → synthesizer → writer ↔ critic → validator."""
 from __future__ import annotations
 
 import re
@@ -9,9 +9,10 @@ from concurrent.futures import ThreadPoolExecutor
 from qwen_agent.agents import Assistant
 from qwen_agent.utils.output_beautify import typewriter_print
 
-# Импорт tools обязателен для @register_tool — не удалять даже если не используется прямо
-# Импорт llm — для регистрации @register_llm("mlx") (иначе resume_research при запуске
-# без предварительной загрузки модели через agent.py упадёт на 'Please set model_type').
+# Importing tools is required for @register_tool side effects — do not remove
+# even if the name is unused here. Importing llm registers @register_llm("mlx")
+# (otherwise resume_research launched without agent.py bootstrapping fails with
+# "Please set model_type").
 from . import cli as cli_run
 from . import kb as kb_mod
 from . import llm as _llm_register  # noqa: F401
@@ -21,10 +22,10 @@ from . import tools  # noqa: F401
 from .config import (
     CFG,
     DRAFT_PATH,
-    LESSONS_PATH,  # noqa: F401  # re-exported для monkeypatch в тестах (pipeline.LESSONS_PATH)
+    LESSONS_PATH,  # noqa: F401  # re-exported for tests (pipeline.LESSONS_PATH)
     NOTES_PATH,
     PLAN_PATH,
-    REJECTED_PATH,  # noqa: F401  # re-exported для monkeypatch в тестах (pipeline.REJECTED_PATH)
+    REJECTED_PATH,  # noqa: F401  # re-exported for tests (pipeline.REJECTED_PATH)
     RESEARCH_DIR,
     SYNTHESIS_PATH,
 )
@@ -54,11 +55,12 @@ log = get_logger("pipeline")
 
 
 def prefetch_iteration(focus: str, limit: int = 5, hf_timeout: int = 30, gh_timeout: int = 20) -> dict:
-    """Прогревает disk-cache hf_papers + github_search параллельно до запуска explorer-LLM.
+    """Warms disk-cache of hf_papers + github_search in parallel before the explorer LLM runs.
 
-    Когда explorer затем вызовет те же команды, они отработают из кеша (~0с вместо
-    ~10-30с каждая). Тихо игнорирует ошибки CLI — это прогрев, не критичная операция.
-    Возвращает {'hf': bool, 'gh': bool, 'elapsed': float} для наблюдаемости.
+    When the explorer later issues the same commands they hit the cache (~0s
+    vs ~10-30s each). CLI errors are silently ignored — this is a warmup,
+    not a critical op. Returns {'hf': bool, 'gh': bool, 'elapsed': float}
+    for observability.
     """
     t0 = time.time()
     hf_cmd = ["hf", "papers", "search", focus, "--limit", str(limit * 2), "--format", "json"]
@@ -121,8 +123,8 @@ def _run_agent(bot: Assistant, messages: list, icon: str) -> list:
 
 
 def _current_focus(query: str) -> str:
-    """Фокус берётся из plan.json (источник истины). Если его нет (legacy или
-    plan.json повреждён), fallback — parsing plan.md.
+    """Focus is taken from plan.json (source of truth). If missing (legacy or
+    corrupted plan.json), fallback to parsing plan.md.
     """
     plan = plan_mod.load()
     if plan:
@@ -139,82 +141,84 @@ def _current_focus(query: str) -> str:
 
 
 def _rotate_focus_fallback(query: str) -> bool:
-    """Программная ротация фокуса через plan.json. Закрывает текущий focus как dropped
-    (если он ещё открыт) и ставит фокус на первую open-задачу. Возвращает True если удалось.
+    """Programmatic focus rotation via plan.json. Closes the current focus as
+    blocked (if still open) and sets focus to the first open task. Returns
+    True if rotation succeeded.
     """
     plan = plan_mod.load()
     if not plan:
         return False
     if plan.current_focus_id:
-        # помечаем как заблокированный — replanner провалился на нём
+        # mark as blocked — the replanner failed on it
         t = plan.get(plan.current_focus_id)
         if t and t.status == "in_progress":
-            plan.block_task(t.id, why="replanner провалился дважды, ротируем")
+            plan.block_task(t.id, why="replanner failed twice, rotating")
         plan.current_focus_id = None
     next_t = next((t for t in plan.tasks if t.status == "open"), None)
     if not next_t:
         plan_mod.save(plan)
         return False
-    plan.set_focus(next_t.id, why="fallback ротация после провала replanner'а")
+    plan.set_focus(next_t.id, why="fallback rotation after replanner failure")
     plan_mod.save(plan)
     return True
 
 
 def _bootstrap_initial_plan(query: str) -> bool:
-    """Один LLM-вызов BOOTSTRAP-планера → переписываем plan.json специфичными задачами.
+    """One LLM call to BOOTSTRAP-planner → rewrites plan.json with specific tasks.
 
-    Стратегия восстановления при ошибках (в порядке):
-    1. Полный INITIAL_PLANNER_PROMPT (1 попытка).
-    2. Упрощённый retry-prompt: только JSON со списком терминов и заголовков (1 попытка).
-    3. Static-vocabulary fallback: keyword_set от query → domain gate работает
-       по специфичным словам из самой темы вместо ослабления до header-only.
+    Recovery strategy on errors (in order):
+    1. Full INITIAL_PLANNER_PROMPT (1 try).
+    2. Simplified retry-prompt: JSON only, with a list of terms and titles (1 try).
+    3. Static-vocabulary fallback: keyword_set(query) → the domain gate runs
+       on specific words derived from the topic itself instead of relaxing
+       to header-only.
 
-    Возвращает True если bootstrap успешно применён (включая fallback на static vocab),
-    False если оставлен полностью статический план без vocabulary.
+    Returns True if bootstrap was applied (including the static-vocab fallback),
+    False when only a fully static plan without vocabulary remains.
     """
-    # ── Попытка 1: полный prompt ─────────────────────────────────
+    # ── Attempt 1: full prompt ───────────────────────────────────
     parsed = _try_bootstrap_call(query, INITIAL_PLANNER_PROMPT, label="bootstrap")
     if parsed:
         return _apply_bootstrap_parsed(query, parsed)
 
-    # ── Попытка 2: упрощённый retry ──────────────────────────────
+    # ── Attempt 2: simplified retry ──────────────────────────────
     retry_prompt = (
-        "Верни СТРОГО один JSON-объект (без markdown-ограды, без пояснений) формата:\n"
+        "Return STRICTLY one JSON object (no markdown fence, no explanation) of the form:\n"
         '{"topic_type": "engineering|theoretical|mixed",\n'
-        ' "core_vocabulary": ["<8-12 узких доменных терминов>"],\n'
-        ' "tasks": [{"title": "<40-90 симв>", "why": "<1 строка>"}, ...]}\n'
-        "Минимум 4 задачи в tasks. Никакого текста вне JSON."
+        ' "core_vocabulary": ["<8-12 narrow domain terms>"],\n'
+        ' "tasks": [{"title": "<40-90 chars>", "why": "<1 line>"}, ...]}\n'
+        "At least 4 tasks in tasks. No text outside the JSON."
     )
     parsed = _try_bootstrap_call(query, retry_prompt, label="bootstrap-retry")
     if parsed:
         return _apply_bootstrap_parsed(query, parsed)
 
-    # ── Fallback 3: static vocabulary из query ───────────────────
+    # ── Fallback 3: static vocabulary derived from query ─────────
     from .utils import derive_static_vocabulary
     static_vocab = derive_static_vocabulary(query)
     if static_vocab:
-        # Reset уже создал статический план. Просто дописываем core_vocabulary в plan.
+        # Reset already created the static plan. Just write core_vocabulary.
         plan = plan_mod.load()
         if plan is not None:
             plan.core_vocabulary = static_vocab
             plan_mod.save(plan)
-            log.warning("bootstrap planner failed twice; static-vocab fallback применён "
-                        "(%d терминов из query): %s", len(static_vocab), ", ".join(static_vocab))
-            print(f"   🛟 bootstrap fallback: static vocabulary из query "
-                  f"({len(static_vocab)} терминов) — gate работает но без LLM-уточнений")
+            log.warning("bootstrap planner failed twice; static-vocab fallback applied "
+                        "(%d terms from query): %s", len(static_vocab), ", ".join(static_vocab))
+            print(f"   🛟 bootstrap fallback: static vocabulary from query "
+                  f"({len(static_vocab)} terms) — gate works but without LLM refinement")
             return True
-    log.warning("bootstrap planner: все стратегии провалились, plan без core_vocabulary "
-                "(gate fail-closed заблокирует все append'ы пока CFG['allow_no_vocab']=True)")
-    print("   ⚠️  bootstrap plan: статический план без vocabulary — agent НЕ сможет писать "
-          "в notes пока тебе не разрешишь CFG['allow_no_vocab']=True")
+    log.warning("bootstrap planner: all strategies failed, plan without core_vocabulary "
+                "(fail-closed gate will block all appends until CFG['allow_no_vocab']=True)")
+    print("   ⚠️  bootstrap plan: static plan without vocabulary — the agent cannot write "
+          "to notes until you set CFG['allow_no_vocab']=True")
     return False
 
 
 def _try_bootstrap_call(query: str, prompt: str, *, label: str) -> tuple | None:
-    """Один вызов LLM с заданным prompt'ом. Возвращает parse_bootstrap_json результат или None."""
+    """One LLM call with the given prompt. Returns parse_bootstrap_json output or None."""
     try:
         planner = build_bot(prompt, [], max_tokens=1024)
-        msgs = [{"role": "user", "content": f"Тема: {query}"}]
+        msgs = [{"role": "user", "content": f"Topic: {query}"}]
         resp = _run_agent(planner, msgs, "🧭")
         raw = ""
         if resp and isinstance(resp, list):
@@ -225,51 +229,52 @@ def _try_bootstrap_call(query: str, prompt: str, *, label: str) -> tuple | None:
                     break
         parsed = plan_mod.parse_bootstrap_json(raw)
         if not parsed:
-            log.warning("%s: невалидный JSON. Сырой ответ (первые 300 симв): %s",
-                        label, (raw or "(пусто)")[:300])
+            log.warning("%s: invalid JSON. Raw reply (first 300 chars): %s",
+                        label, (raw or "(empty)")[:300])
         return parsed
     except Exception as exc:
-        log.warning("%s упал (%s)", label, exc)
+        log.warning("%s failed (%s)", label, exc)
         return None
 
 
 def _apply_bootstrap_parsed(query: str, parsed: tuple) -> bool:
-    """Применяет распарсенный bootstrap result к plan.json. True если успех."""
+    """Applies the parsed bootstrap result to plan.json. True on success."""
     topic_type, seeds, core_vocab = parsed
     plan = plan_mod.bootstrap_from_seeds(query, seeds, topic_type=topic_type,
                                          core_vocabulary=core_vocab)
     if plan is None:
-        log.warning("bootstrap planner: seeds не прошли валидацию (n=%d)", len(seeds))
+        log.warning("bootstrap planner: seeds did not pass validation (n=%d)", len(seeds))
         return False
     vocab_n = len(plan.core_vocabulary)
     if vocab_n == 0:
-        # LLM вернул валидный JSON но с пустым vocabulary — пробуем static fallback
+        # LLM returned valid JSON but empty vocabulary — try static fallback.
         from .utils import derive_static_vocabulary
         static_vocab = derive_static_vocabulary(query)
         if static_vocab:
             plan.core_vocabulary = static_vocab
             plan_mod.save(plan)
             vocab_n = len(static_vocab)
-            log.warning("bootstrap planner: LLM vocab пуст, static-vocab из query применён "
-                        "(%d терминов)", vocab_n)
-    print(f"   🧭 bootstrap plan: topic_type={topic_type}, задач={len(seeds)}, "
+            log.warning("bootstrap planner: LLM vocab empty, static-vocab from query applied "
+                        "(%d terms)", vocab_n)
+    print(f"   🧭 bootstrap plan: topic_type={topic_type}, tasks={len(seeds)}, "
           f"core_vocabulary={vocab_n}")
     return True
 
 
 def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
-    """Полный пайплайн: explorer/replanner (×depth) → compressor → synthesizer →
-    writer/critic (×critic_rounds) → validator цитат."""
+    """Full pipeline: explorer/replanner (×depth) → compressor → synthesizer →
+    writer/critic (×critic_rounds) → citation validator."""
     from lra import tool_tracker
     tool_tracker.reset_tracker()
-    tool_tracker.set_tool_budget("compact_notes", 4)  # предотвращает compact_notes loop (см. tool_tracker.py)
+    tool_tracker.set_tool_budget("compact_notes", 4)  # prevents compact_notes loop (see tool_tracker.py)
     metrics = RunMetrics(query=query)
-    print(f"📁 Рабочая папка: {RESEARCH_DIR}\n")
+    print(f"📁 Working directory: {RESEARCH_DIR}\n")
 
-    # Bootstrap-планер (опционально): один LLM-вызов до фазы 1 генерирует 4-6
-    # тематически-специфичных seed-задач и классифицирует тему (engineering / theoretical
-    # / mixed). При ошибке/невалидном JSON тихо остаёмся на статическом плане,
-    # который уже создал reset_research → plan_mod.reset().
+    # Bootstrap planner (optional): one LLM call before phase 1 generates 4-6
+    # topic-specific seed tasks and classifies the topic (engineering /
+    # theoretical / mixed). On any error/invalid JSON we silently fall back to
+    # the static plan that reset_research → plan_mod.reset() has already
+    # produced.
     if CFG.get("dynamic_initial_plan", True):
         _bootstrap_initial_plan(query)
 
@@ -284,65 +289,65 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
                           ["read_notes", "read_plan", "write_plan"],
                           max_tokens=3072)
 
-    print(f"🕳️  Фаза 1: кроличья нора (до {depth} итераций, адаптивный план)")
+    print(f"🕳️  Phase 1: rabbit hole (up to {depth} iterations, adaptive plan)")
     low_gain_streak = 0
-    empty_iter_streak = 0  # подряд итераций, где explorer не вырастил notes (grew<100 после retry)
-    stuck_focus_streak = 0  # подряд итераций с тем же FOCUS
+    empty_iter_streak = 0  # consecutive iterations where explorer did not grow notes (grew<100 after retry)
+    stuck_focus_streak = 0  # consecutive iterations with the same FOCUS
     prev_focus = None
     for i in range(1, depth + 1):
         focus = _current_focus(query)
-        print(f"\n── итерация {i}/{depth} ──  🎯 FOCUS: {focus[:80]}")
+        print(f"\n── iteration {i}/{depth} ──  🎯 FOCUS: {focus[:80]}")
         t_iter_start = time.time()
-        # Прогреваем disk-cache параллельно — hf+gh одновременно, до первого LLM-вызова
+        # Warm disk cache in parallel — hf+gh concurrently, before the first LLM call.
         pf = prefetch_iteration(focus)
         cached_marks = []
         if pf["hf_cached"]:
             cached_marks.append("hf")
         if pf["gh_cached"]:
             cached_marks.append("gh")
-        cache_note = f" (из кеша: {','.join(cached_marks)})" if cached_marks else ""
-        print(f"   ⚡ prefetch hf+gh параллельно: {pf['elapsed']:.1f}с{cache_note}")
+        cache_note = f" (from cache: {','.join(cached_marks)})" if cached_marks else ""
+        print(f"   ⚡ prefetch hf+gh in parallel: {pf['elapsed']:.1f}s{cache_note}")
         ids_before = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         before = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
-        # Инжектим в сообщение explorer'а top-3 атома из KB, релевантных FOCUS'у —
-        # это даёт постоянный контекст поверх read_notes (который режется на 20k симв).
+        # Inject top-3 atoms from KB relevant to FOCUS into the explorer's message —
+        # this gives persistent context on top of read_notes (which is capped at 20k chars).
         kb_context = kb_mod.format_atoms(kb_mod.search(focus, k=3))
-        kb_block = f"\n\nУже известно по схожим темам (KB top-3):\n{kb_context}\n" if kb_context else ""
+        kb_block = f"\n\nAlready known on similar topics (KB top-3):\n{kb_context}\n" if kb_context else ""
         memory_context = _build_memory_context(query, focus)
         memory_block = (
-            f"\n\nРелевантная cross-session память:\n{memory_context}\n"
+            f"\n\nRelevant cross-session memory:\n{memory_context}\n"
             if memory_context else ""
         )
         status_block = "\n\n" + _build_status_context(query, focus)
         t_exp = time.time()
         msg = [{"role": "user",
-                "content": f"Исходная тема: {query}\n"
-                           f"Текущий [FOCUS] из plan.md: {focus}{kb_block}{memory_block}{status_block}\n"
-                           "Сделай одну итерацию по [FOCUS]. ОБЯЗАТЕЛЬНО append_notes и append_lessons. "
-                           "Для КАЖДОЙ новой статьи/репозитория вызови kb_add — это нужно для поиска "
-                           "по накопленному знанию на будущих итерациях."}]
+                "content": f"Original topic: {query}\n"
+                           f"Current [FOCUS] from plan.md: {focus}{kb_block}{memory_block}{status_block}\n"
+                           "Do one iteration on [FOCUS]. MANDATORY append_notes and append_lessons. "
+                           "For EVERY new paper/repository call kb_add — needed for search "
+                           "over accumulated knowledge in future iterations."}]
         _run_agent(explorer, msg, "🔎")
         explorer_seconds = time.time() - t_exp
         after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
         grew = after - before
         ids_after = extract_ids(NOTES_PATH.read_text(encoding='utf-8') if NOTES_PATH.exists() else "")
         new_ids = ids_after - ids_before
-        print(f"   📝 notes: +{grew} симв ({after} всего)  📊 новых arxiv-id: {len(new_ids)}")
+        print(f"   📝 notes: +{grew} chars ({after} total)  📊 new arxiv-ids: {len(new_ids)}")
         if grew < 100:
-            print("   ⚠️  заметки не росли — retry со строгим требованием")
-            # Конкретный план действий вместо абстрактного «повтори». Различаем
-            # три причины пустой итерации: (1) дубликат запросов → kb_search,
-            # (2) длинный github-query был заreject'ен → сократить,
-            # (3) задача исчерпана → plan_close_task + следующий TODO.
+            print("   ⚠️  notes did not grow — retry with a strict instruction")
+            # Concrete plan of action instead of an abstract 'try again'. Three causes
+            # of an empty iteration: (1) duplicate queries → kb_search, (2) long
+            # github query rejected → shorten, (3) task exhausted → plan_close_task
+            # + next TODO.
             retry = [{"role": "user", "content": (
-                f"ПРОВАЛ: итерация пустая (grew={grew}, new_ids=0). Выполни ТОЧНО этот порядок:\n"
-                f"1) kb_search '{focus[:60]}' (k=5) — проверь что уже в базе.\n"
-                f"2) hf_papers с ПЕРЕФОРМУЛИРОВАННЫМ запросом по '{focus[:60]}' "
-                "(смени термины, год, автора — НЕ ту же фразу что в querylog); limit=5.\n"
-                "3) Если и это вернуло дубликат — СРАЗУ append_notes (2-3 факта из kb_search "
-                "результатов) и append_lessons строкой «[iter] исчерпано: <focus>; "
-                "следующий шаг: plan_close_task». Не зацикливайся на github_search.\n"
-                "4) plan_close_task(id=<focus id>, evidence='...', why='исчерпано').")}]
+                f"FAILURE: empty iteration (grew={grew}, new_ids=0). Execute EXACTLY this order:\n"
+                f"1) kb_search '{focus[:60]}' (k=5) — check what is already in the base.\n"
+                f"2) hf_papers with a REPHRASED query on '{focus[:60]}' "
+                "(change terms, year, author — NOT the same phrase as in querylog); limit=5.\n"
+                "3) If that also returned a duplicate — IMMEDIATELY append_notes (2-3 facts "
+                "from kb_search results) and append_lessons with '[iter] exhausted: <focus>; "
+                "next step: plan_close_task'. Do not loop on github_search.\n"
+                "4) plan_close_task(id=<focus id>, evidence='...', why='exhausted').")}]
             _run_agent(explorer, retry, "🔁")
             after = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
             grew = after - before
@@ -351,35 +356,35 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
 
         low_gain_streak = low_gain_streak + 1 if len(new_ids) < 2 else 0
 
-        print("   🧭 replanner обновляет план...")
+        print("   🧭 replanner updates the plan...")
         plan_before = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
         t_rep = time.time()
         _run_agent(replanner,
                    [{"role": "user",
-                     "content": f"Исходная тема: {query}. Обнови plan.md: Digest, Direction check, "
-                                "новый [FOCUS], пересортируй [TODO]. Используй write_plan."}],
+                     "content": f"Original topic: {query}. Update plan.md: Digest, Direction check, "
+                                "new [FOCUS], resort [TODO]. Use write_plan."}],
                    "🧭")
         replanner_seconds = time.time() - t_rep
         plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
         if plan_text == plan_before:
-            print("   ⚠️  план не обновился — retry")
+            print("   ⚠️  plan did not update — retry")
             _run_agent(replanner,
                        [{"role": "user", "content": (
-                           "ПРОВАЛ: ты НЕ вызвал write_plan. Сейчас: (1) read_notes — "
-                           "посмотри что добавилось за последнюю итерацию, (2) write_plan "
-                           "ОБЯЗАТЕЛЬНО: обнови Digest (3-5 новых пунктов с [arxiv-id]), "
-                           "выставь новый [FOCUS] (берём из [TODO] подтему с МЕНЬШИМ "
-                           "количеством evidence), обнови [TODO]/[DONE]. "
-                           "Формат tool_call arguments — строгий JSON без markdown.")}],
+                           "FAILURE: you did NOT call write_plan. Now: (1) read_notes — "
+                           "look at what was added in the last iteration, (2) write_plan "
+                           "MANDATORY: update Digest (3-5 new bullets with [arxiv-id]), "
+                           "set a new [FOCUS] (take from [TODO] the sub-topic with the LEAST "
+                           "evidence), update [TODO]/[DONE]. "
+                           "tool_call arguments — strict JSON without markdown.")}],
                        "🔁")
             plan_text = PLAN_PATH.read_text(encoding='utf-8') if PLAN_PATH.exists() else ""
             if plan_text == plan_before:
-                # Replanner провалился оба раза — ротируем FOCUS программно, чтобы не зацикливаться.
+                # Replanner failed twice in a row — rotate FOCUS programmatically so we don't loop.
                 if _rotate_focus_fallback(query):
-                    print("   🛟 fallback: FOCUS ротирован программно из [TODO]")
+                    print("   🛟 fallback: FOCUS rotated programmatically from [TODO]")
                     plan_text = PLAN_PATH.read_text(encoding='utf-8')
-        # Если replanner выставил новый [FOCUS] через write_plan (legacy-путь),
-        # синхронизируем plan.json — иначе источник истины разъедется с plan.md.
+        # If the replanner set a new [FOCUS] via write_plan (legacy path),
+        # sync plan.json — otherwise the source of truth diverges from plan.md.
         _plan = plan_mod.load()
         if _plan and plan_text:
             if plan_mod.sync_focus_from_md(_plan, plan_text, iter_=i):
@@ -387,9 +392,9 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         new_focus = _current_focus(query)
         focus_changed = new_focus != focus
         if focus_changed:
-            print(f"   🔀 вектор скорректирован: {focus[:50]} → {new_focus[:50]}")
+            print(f"   🔀 vector corrected: {focus[:50]} → {new_focus[:50]}")
 
-        # Трекинг застревания: тот же FOCUS подряд + пустой explorer подряд
+        # Stuck tracking: same FOCUS in a row + empty explorer in a row
         if prev_focus is not None and new_focus == prev_focus:
             stuck_focus_streak += 1
         else:
@@ -400,8 +405,8 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         else:
             empty_iter_streak = 0
 
-        # ── Детерминированный guard: инкрементирует attempts, блокирует исчерпанные
-        # задачи, авто-ротирует фокус, сигналит HALT если все задачи закрыты/заблокированы.
+        # ── Deterministic guard: bumps attempts, blocks exhausted tasks, auto-
+        # rotates focus, signals HALT when all tasks are closed/blocked.
         _plan = plan_mod.load()
         if _plan:
             rep = plan_mod.guard(
@@ -413,7 +418,7 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
             if rep.blocked_ids or rep.rotated_focus or rep.warnings:
                 print(f"   🛡️  guard: {rep.summary()}")
             if rep.halt:
-                print(f"✅ Ранний стоп: guard сообщил {rep.halt_reason}")
+                print(f"✅ Early stop: guard reported {rep.halt_reason}")
                 metrics.stopped_early_reason = f"GUARD_{rep.halt_reason}"
                 metrics.iterations.append(IterationMetric(
                     iteration=i, focus=focus[:200],
@@ -441,69 +446,71 @@ def research_loop(query: str, depth: int = 6, critic_rounds: int = 2):
         ))
 
         if "PLAN_COMPLETE" in plan_text:
-            print("✅ План исчерпан")
+            print("✅ Plan exhausted")
             metrics.stopped_early_reason = "PLAN_COMPLETE"
             break
         if "[TODO]" not in plan_text and i > 1:
-            print("✅ Нет больше [TODO]")
+            print("✅ No more [TODO]")
             metrics.stopped_early_reason = "NO_TODO"
             break
-        # P10: per-iteration wall-clock timeout. Прошлый прогон имел итерацию
-        # длиной 9.6h (MLX-аномалия); такой overrun не должен тянуть за собой
-        # ещё N итераций той же глубины. MLX mid-call не прерываем — но после
-        # возврата смотрим суммарное время итерации и если > limit — халт.
+        # P10: per-iteration wall-clock timeout. A previous run had an iteration
+        # of 9.6 hours (MLX anomaly); such an overrun must not drag N more
+        # iterations with it. We do not interrupt MLX mid-call but after it
+        # returns we look at the total iteration time and halt if over the limit.
         iter_wall_limit = CFG.get("iter_wall_clock_limit_s", 900)
         iter_elapsed = time.time() - t_iter_start
         if iter_wall_limit and iter_elapsed > iter_wall_limit:
-            print(f"✅ Ранний стоп: iter {i} длилась {iter_elapsed:.0f}s > "
+            print(f"✅ Early stop: iter {i} took {iter_elapsed:.0f}s > "
                   f"limit {iter_wall_limit}s (ITER_WALL_CLOCK)")
             metrics.stopped_early_reason = "ITER_WALL_CLOCK"
             break
         if empty_iter_streak >= 2:
-            print("✅ Ранний стоп: 2 итерации подряд explorer не вырастил notes (агент застрял)")
+            print("✅ Early stop: 2 consecutive iterations with no note growth (agent stuck)")
             metrics.stopped_early_reason = "EMPTY_ITERATIONS"
             break
         if stuck_focus_streak >= 2 and i >= 3:
-            print(f"✅ Ранний стоп: FOCUS не менялся 3 итерации подряд ({prev_focus[:50]})")
+            print(f"✅ Early stop: FOCUS unchanged for 3 iterations ({prev_focus[:50]})")
             metrics.stopped_early_reason = "FOCUS_STUCK"
             break
         if low_gain_streak >= 2 and i >= 3:
-            print("✅ Ранний стоп: 2 итерации подряд < 2 новых id")
+            print("✅ Early stop: 2 consecutive iterations with < 2 new ids")
             metrics.stopped_early_reason = "LOW_GAIN"
             break
 
-    # Фаза 1.5 — компрессия
+    # Phase 1.5 — compression
     notes_size = NOTES_PATH.stat().st_size if NOTES_PATH.exists() else 0
     if notes_size > 8000:
-        print(f"\n🗜️  Фаза 1.5: компрессор ({notes_size} симв → ~5000)")
+        print(f"\n🗜️  Phase 1.5: compressor ({notes_size} chars → ~5000)")
         compressor = build_bot(COMPRESSOR_PROMPT, ["read_notes", "compact_notes"])
-        _run_agent(compressor, [{"role": "user", "content": "Сократи заметки до ~5000 симв."}], "🗜️")
+        _run_agent(compressor, [{"role": "user", "content": "Compress notes to ~5000 chars."}], "🗜️")
 
-    # Фаза 2.0 — синтез
-    print("\n💡 Фаза 2.0: синтезатор (мосты/противоречия/пробелы/экстраполяция/testable)")
+    # Phase 2.0 — synthesis
+    print("\n💡 Phase 2.0: synthesizer (bridges / contradictions / gaps / extrapolation / testable)")
     synthesizer = build_bot(SYNTHESIZER_PROMPT,
                             ["read_plan", "read_notes", "read_notes_focused", "write_synthesis", "kb_search"],
                             max_tokens=4096)
     synth_memory = _build_memory_context(query, "synthesis insights")
     synth_memory_block = (
-        f"\n\nРелевантная cross-session память:\n{synth_memory}"
+        f"\n\nRelevant cross-session memory:\n{synth_memory}"
         if synth_memory else ""
     )
     synth_status_block = "\n\n" + _build_status_context(query)
     t_syn = time.time()
     _run_agent(synthesizer,
                [{"role": "user",
-                 "content": f"Произведи пять типов инсайтов по теме: {query}{synth_memory_block}{synth_status_block}"}],
+                 "content": f"Produce the six insight blocks on the topic: {query}"
+                            f"{synth_memory_block}{synth_status_block}"}],
                "💡")
     metrics.synthesis_seconds = time.time() - t_syn
 
     _finalize_draft(query, metrics, critic_rounds)
 
 
-# Re-export из context_builders. Исторически эти функции жили в pipeline и на их
-# полное имя `lra.pipeline._build_*` завязаны tests (`pipeline._build_status_context`)
-# и внешние потребители (agent.py). При переносе в отдельный модуль сохраняем старые
-# имена как re-export — сигнатуры и поведение идентичны.
+# Re-export from context_builders. Historically these helpers lived in pipeline
+# and their fully-qualified name `lra.pipeline._build_*` is used by tests
+# (`pipeline._build_status_context`) and external consumers (agent.py). When
+# we moved them into a dedicated module we kept the old names as re-exports —
+# signatures and behavior are identical.
 from .context_builders import (  # noqa: E402
     _build_kb_context,
     _build_memory_context,
@@ -528,15 +535,15 @@ _CITATION_DANGLING_RE = re.compile(r"(\][^\n]{0,40}?)\s*\((arxiv-id|repo:\s*[^)]
 
 
 def _normalize_citations(text: str) -> str:
-    r"""Чинит уродливый стиль `[`id`](arxiv-id)` / `[`id`](repo: X)` → плоский `[id]` / `[id, repo: X]`.
+    r"""Fixes the ugly `[`id`](arxiv-id)` / `[`id`](repo: X)` style → flat `[id]` / `[id, repo: X]`.
 
-    Нормализует распространённые формы, которые модель любит генерить:
+    Normalizes common forms the model likes to emit:
       1. ``[`2510.15624`](arxiv-id)`` → ``[2510.15624]``
       2. ``[`2510.15624`](repo: freephdlabor)`` → ``[2510.15624, repo: freephdlabor]``
-      3. голый ```2506.09440``` → ``[2506.09440]``
+      3. bare ```2506.09440``` → ``[2506.09440]``
       4. ``[`synthesis`]`` → ``[synthesis]``
-      5. ``[[x], [y]]`` → ``[x, y]`` (склейка после шага 1)
-      6. висячий ``(arxiv-id)`` / ``(repo: X)`` после ``[id]`` — удаляется
+      5. ``[[x], [y]]`` → ``[x, y]`` (after step 1)
+      6. dangling ``(arxiv-id)`` / ``(repo: X)`` after ``[id]`` — removed
     """
 
     def _linky(m: re.Match) -> str:
@@ -550,20 +557,20 @@ def _normalize_citations(text: str) -> str:
     text = _CITATION_INNER_BT_RE.sub(lambda m: f"[{m.group(1)}]", text)
     text = _CITATION_BT_RE.sub(lambda m: f"[{m.group(1)}]", text)
 
-    # Склейка вложенных [[a], [b]] → [a, b]
+    # Flatten nested [[a], [b]] → [a, b]
     def _flatten(m: re.Match) -> str:
         inner = m.group(1)
         parts = re.findall(r"\[([^\[\]]+)\]", inner)
         return "[" + ", ".join(p.strip() for p in parts) + "]"
 
     text = _CITATION_NESTED_RE.sub(_flatten, text)
-    # Висячий (arxiv-id)/(repo: X) сразу после ] — убираем
+    # Dangling (arxiv-id)/(repo: X) right after ] — strip.
     text = _CITATION_DANGLING_RE.sub(r"\1", text)
     return text
 
 
 def _normalize_draft_file() -> bool:
-    """Применяет _normalize_citations к draft.md inplace. Возвращает True если были правки."""
+    """Applies _normalize_citations to draft.md in place. Returns True if anything changed."""
     if not DRAFT_PATH.exists():
         return False
     original = DRAFT_PATH.read_text(encoding="utf-8")
@@ -574,9 +581,9 @@ def _normalize_draft_file() -> bool:
     return False
 
 
-# ── P7: канонизация секции "## Источники" по факту цитат в body ──────────
+# ── P7: canonicalize the "## Sources" section against in-body citations ──
 _SOURCES_HEADING_RE = re.compile(
-    r"(^|\n)##+\s*(Источники|Sources|References)\s*\n.*?(?=\n##\s|\Z)",
+    r"(^|\n)##+\s*(Sources|References|Источники)\s*\n.*?(?=\n##\s|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
 _BODY_ARXIV_RE = re.compile(r"\[(\d{4}\.\d{4,6})(?:v\d+)?\]")
@@ -584,24 +591,25 @@ _BODY_REPO_RE = re.compile(r"\[repo:\s*([^\]]+)\]|(?:^|\s)([a-zA-Z0-9_.-]+/[a-zA
 
 
 def _canonicalize_sources_section(text: str, invalid_ids: list[str]) -> tuple[str, bool]:
-    """Заменяет содержимое ## Источники каноническим списком из body-цитат.
+    """Replaces the content of ## Sources with a canonical list of body citations.
 
-    1. Собирает все [arxiv-id] из body (ВЕСЬ draft до секции Sources).
-    2. Выкидывает из этого списка invalid_ids (validator'ом помеченные как не-существующие).
-    3. Собирает [repo: owner/name] из body.
-    4. Перегенерирует секцию Sources каноническим форматом.
+    1. Collect all [arxiv-id] from the body (the whole draft before the Sources section).
+    2. Drop invalid_ids (flagged by the validator as non-existent).
+    3. Collect [repo: owner/name] from the body.
+    4. Regenerate the Sources section in the canonical format.
 
-    Защищает от рассинхронизации body↔sources: writer склонен не обновлять этот
-    раздел когда меняет тело. Также чистит 2607.15491-подобные галлюцинации из финала.
+    Protects from body↔sources drift: the writer tends not to update this
+    section when rewriting the body. Also scrubs 2607.15491-style
+    hallucinations out of the final.
 
-    Возвращает (new_text, changed).
+    Returns (new_text, changed).
     """
     m = _SOURCES_HEADING_RE.search(text)
     if not m:
         return text, False
     sources_start = m.start(0)
     body = text[:sources_start]
-    # arxiv-id из body
+    # arxiv-ids from the body
     body_arxiv = []
     seen_arx: set[str] = set()
     invalid_set = {i.strip() for i in (invalid_ids or [])}
@@ -612,7 +620,7 @@ def _canonicalize_sources_section(text: str, invalid_ids: list[str]) -> tuple[st
             continue
         seen_arx.add(aid)
         body_arxiv.append(aid)
-    # repo-id: только форма [repo: X/Y] (bare slashes в тексте слишком noisy для draft)
+    # repo-ids: only the [repo: X/Y] form (bare slashes in the text are too noisy for the draft)
     body_repos: list[str] = []
     seen_repo: set[str] = set()
     for repo_bracket, _ in _BODY_REPO_RE.findall(body):
@@ -623,28 +631,28 @@ def _canonicalize_sources_section(text: str, invalid_ids: list[str]) -> tuple[st
             continue
         seen_repo.add(r)
         body_repos.append(r)
-    # Рендер
-    lines: list[str] = ["", "## Источники", ""]
+    # Render
+    lines: list[str] = ["", "## Sources", ""]
     if body_arxiv:
         for aid in body_arxiv:
             lines.append(f"- [{aid}](https://arxiv.org/abs/{aid})")
     else:
-        lines.append("_нет arxiv-цитат в отчёте_")
+        lines.append("_no arxiv citations in the report_")
     if body_repos:
         lines.append("")
-        lines.append("**Репозитории:**")
+        lines.append("**Repositories:**")
         for r in body_repos:
             lines.append(f"- [{r}](https://github.com/{r})")
     lines.append("")
     new_section = "\n".join(lines)
-    # Сохраняем хвост после секции (если есть)
+    # Preserve the tail after the section, if any.
     tail = text[m.end(0):]
     new_text = body.rstrip() + "\n" + new_section + (tail if tail else "")
     return new_text, new_text != text
 
 
 def _canonicalize_sources_file(invalid_ids: list[str]) -> bool:
-    """Применяет _canonicalize_sources_section к draft.md inplace."""
+    """Applies _canonicalize_sources_section to draft.md in place."""
     if not DRAFT_PATH.exists():
         return False
     original = DRAFT_PATH.read_text(encoding="utf-8")
@@ -658,9 +666,10 @@ _UNAPPROVED_BANNER_MARK = "<!-- lra-unapproved-banner -->"
 
 
 def _prepend_unapproved_banner(n_rounds: int, invalid: list[str], suspicious: list[str]) -> None:
-    """Вставляет warning-баннер в начало draft.md когда critic не approve'д его.
+    """Prepends a warning banner to draft.md when no critic round approved it.
 
-    Идемпотентен: если баннер уже есть (маркер в HTML-комменте), не дублирует.
+    Idempotent: if the banner marker (HTML comment) is already present, we do not
+    duplicate it.
     """
     if not DRAFT_PATH.exists():
         return
@@ -669,15 +678,15 @@ def _prepend_unapproved_banner(n_rounds: int, invalid: list[str], suspicious: li
         return
     parts = [
         f"{_UNAPPROVED_BANNER_MARK}",
-        "> ⚠️ **Draft НЕ approved критиком**",
-        f"> Пройдено {n_rounds} раундов критики, ни один не завершился APPROVED.",
+        "> ⚠️ **Draft NOT approved by critic**",
+        f"> {n_rounds} critic rounds completed, none ended with APPROVED.",
     ]
     if invalid:
-        parts.append(f"> Галлюцинированные id (удалены из Источников): {', '.join(invalid)}.")
+        parts.append(f"> Hallucinated ids (removed from Sources): {', '.join(invalid)}.")
     if suspicious:
-        parts.append(f"> Подозрительные цитаты (слабое совпадение с notes): {', '.join(suspicious)}.")
+        parts.append(f"> Suspicious citations (weak overlap with notes): {', '.join(suspicious)}.")
     parts.extend([
-        "> Проверяй факты вручную перед использованием.",
+        "> Verify facts manually before use.",
         "",
         "",
     ])
@@ -687,68 +696,69 @@ def _prepend_unapproved_banner(n_rounds: int, invalid: list[str], suspicious: li
 
 def _hitl_review(query: str, writer: Assistant, writer_msgs: list,
                  valid: int, invalid: list, suspicious: list) -> None:
-    """Human-in-the-loop пауза после validator'а. Печатает превью + метрики и
-    просит пользователя либо утвердить черновик, либо дать комментарий на один
-    дополнительный проход writer'а, либо пропустить.
+    """Human-in-the-loop pause after the validator. Prints a preview + metrics
+    and asks the user either to approve the draft, give a comment for one
+    extra writer pass, or skip.
 
-    Вызывается только если CFG.hitl=True И stdin — TTY (иначе в тестах/resume
-    сломает неинтерактивный запуск).
+    Invoked only if CFG.hitl=True AND stdin is a TTY (otherwise tests / resume
+    would break non-interactive runs).
     """
     if not CFG.get("hitl", False) or not sys.stdin.isatty() or not DRAFT_PATH.exists():
         return
     print("\n" + "═" * 60)
-    print("🧑 HITL pause-point — отчёт готов, но можно внести правки")
+    print("🧑 HITL pause-point — report ready, fixes still possible")
     print("═" * 60)
     draft_text = DRAFT_PATH.read_text(encoding="utf-8")
     preview = draft_text if len(draft_text) < 2000 else draft_text[:1000] + "\n...\n" + draft_text[-800:]
     print(preview)
     print("─" * 60)
-    print(f"Метрики: valid={valid}, invalid={len(invalid)}, suspicious={len(suspicious)}, "
+    print(f"Metrics: valid={valid}, invalid={len(invalid)}, suspicious={len(suspicious)}, "
           f"chars={len(draft_text)}")
-    print("Команды: [a] approve как есть  |  [r] revise (попросить writer'а переписать)  "
-          "|  [s] skip (то же что approve)")
+    print("Commands: [a] approve as-is  |  [r] revise (ask the writer to rewrite)  "
+          "|  [s] skip (same as approve)")
     try:
-        choice = input("Выбор [a/r/s]: ").strip().lower()
+        choice = input("Choice [a/r/s]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
-        print("   ⚠️  HITL прерван — принимаем как есть")
+        print("   ⚠️  HITL interrupted — accepting as-is")
         return
     if choice.startswith("r"):
         comment = choice[1:].strip(" :") if len(choice) > 1 else ""
         if not comment:
             try:
-                comment = input("Что переписать? ").strip()
+                comment = input("What to rewrite? ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("   ⚠️  комментарий не введён — принимаем как есть")
+                print("   ⚠️  no comment entered — accepting as-is")
                 return
         if not comment:
-            print("   ⚠️  пустой комментарий — принимаем как есть")
+            print("   ⚠️  empty comment — accepting as-is")
             return
-        print(f"   🔁 HITL revise: «{comment}» — запускаем один дополнительный writer-pass")
+        print(f"   🔁 HITL revise: '{comment}' — running one extra writer pass")
         writer_msgs.append({"role": "user",
-                            "content": (f"HITL-КОММЕНТАРИЙ от человека по теме «{query}»:\n{comment}\n\n"
-                                        "Перепиши черновик через write_draft + append_draft, "
-                                        "учитывая комментарий. Секции и формат сохраняй.")})
+                            "content": (f"HITL COMMENT from a human on topic '{query}':\n{comment}\n\n"
+                                        "Rewrite the draft via write_draft + append_draft taking "
+                                        "this comment into account. Keep sections and format.")})
         writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
         _normalize_draft_file()
-        print("   ✓ writer переписал draft по HITL-комментарию")
+        print("   ✓ writer rewrote the draft per HITL comment")
     else:
-        print("   ✓ HITL approved — финализируем как есть")
+        print("   ✓ HITL approved — finalizing as-is")
 
 
 def _run_critic_round(critic: Assistant, critic_name: str, query: str,
                       user_hint: str, i: int, total: int,
                       prev_critique: str, metrics: RunMetrics) -> tuple[str, bool, bool]:
-    """Один раунд критики. Возвращает (critique_text, approved, converged).
+    """One critic round. Returns (critique_text, approved, converged).
 
-    Выделено, чтобы не дублировать логику между legacy-single-critic и specialized-critics.
+    Extracted to avoid duplicating the logic between legacy-single-critic and
+    specialized-critics modes.
     """
     print(f"\n── {critic_name} {i}/{total} ──")
     t_cr = time.time()
     c_resp = _run_agent(critic,
                         [{"role": "user", "content": (
-                            f"Оцени черновик по теме: {query}\n\n{user_hint}\n\n"
-                            "После чтения — либо список до 5 правок по формату из system-prompt, "
-                            "либо ровно слово APPROVED на отдельной строке.")}],
+                            f"Review the draft on topic: {query}\n\n{user_hint}\n\n"
+                            "After reading — either a list of up to 5 fixes in the format from "
+                            "the system prompt, or exactly the word APPROVED on its own line.")}],
                         "🔍")
     c_seconds = time.time() - t_cr
     critique = " ".join(m.get("content", "") for m in c_resp if m.get("role") == "assistant").strip()
@@ -762,8 +772,8 @@ def _run_critic_round(critic: Assistant, critic_name: str, query: str,
         sim = jaccard(keyword_set(prev_critique), keyword_set(critique))
         if sim > 0.70:
             converged = True
-            print(f"   🔁 критик зациклился (сходство {sim:.0%})")
-    print(f"   📋 правок: {issues}  (draft_ok={draft_ok}, approved={approved})")
+            print(f"   🔁 critic looping (similarity {sim:.0%})")
+    print(f"   📋 fixes: {issues}  (draft_ok={draft_ok}, approved={approved})")
     metrics.critic_rounds.append(CriticRound(
         round=len(metrics.critic_rounds) + 1, issues_found=(0 if approved else issues),
         approved=approved, converged_by_similarity=converged, seconds=c_seconds,
@@ -773,34 +783,35 @@ def _run_critic_round(critic: Assistant, critic_name: str, query: str,
 
 def _run_legacy_critic(query: str, writer: Assistant, writer_msgs: list,
                        metrics: RunMetrics, critic_rounds: int) -> None:
-    """Один combined critic (CRITIC_PROMPT) с циклом rewrite."""
-    print(f"\n🔍 Фаза 3: критик ({critic_rounds} раунд(ов))")
+    """One combined critic (CRITIC_PROMPT) with rewrite loop."""
+    print(f"\n🔍 Phase 3: critic ({critic_rounds} round(s))")
     critic = build_bot(CRITIC_PROMPT,
                        ["read_draft", "read_notes", "read_synthesis"],
                        max_tokens=2048)
-    hint = ("ОБЯЗАТЕЛЬНО сначала вызови read_draft, потом read_notes и read_synthesis — "
-            "у тебя ЕСТЬ эти инструменты. Не проси прислать текст.")
+    hint = ("MANDATORY: first call read_draft, then read_notes and read_synthesis — "
+            "you HAVE these tools. Do not ask for text to be sent.")
     prev_critique = ""
     for i in range(1, critic_rounds + 1):
         critique, approved, converged = _run_critic_round(
-            critic, "критика", query, hint, i, critic_rounds, prev_critique, metrics)
+            critic, "critic", query, hint, i, critic_rounds, prev_critique, metrics)
         if approved or converged:
             break
         prev_critique = critique
         writer_msgs.append({"role": "user",
-                            "content": f"Критика:\n{critique}\n\nПерепиши через write_draft."})
+                            "content": f"Critique:\n{critique}\n\nRewrite via write_draft."})
         writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
         _normalize_draft_file()
 
 
 def _run_specialized_critics(query: str, writer: Assistant, writer_msgs: list,
                              metrics: RunMetrics, critic_rounds: int) -> None:
-    """Fact-critic → writer rewrite цикл → structure-critic → writer rewrite цикл.
+    """Fact-critic → writer rewrite loop → structure-critic → writer rewrite loop.
 
-    Это отражает insight из [2506.18096]: разделение verifier на фактологический и
-    структурный даёт более точные правки, чем один 'универсальный' critic.
+    Reflects the insight from [2506.18096]: splitting the verifier into a
+    factual and a structural critic yields more precise edits than one
+    'universal' critic.
     """
-    print(f"\n🔍 Фаза 3: specialized critics (fact → structure, до {critic_rounds} раунд(ов) каждый)")
+    print(f"\n🔍 Phase 3: specialized critics (fact → structure, up to {critic_rounds} round(s) each)")
     fact_critic = build_bot(FACT_CRITIC_PROMPT,
                             ["read_draft", "read_notes", "read_synthesis"],
                             max_tokens=2048)
@@ -809,9 +820,9 @@ def _run_specialized_critics(query: str, writer: Assistant, writer_msgs: list,
                               max_tokens=1536)
 
     # Sub-phase A — fact-critic
-    fact_hint = ("ОБЯЗАТЕЛЬНО сначала вызови read_draft, потом read_notes и read_synthesis. "
-                 "Проверяй только фактологию: есть ли [id], упоминается ли id в notes, "
-                 "согласован ли факт рядом с id с notes. Структуру НЕ трогай.")
+    fact_hint = ("MANDATORY: first call read_draft, then read_notes and read_synthesis. "
+                 "Check factuality only: is [id] present, is the id mentioned in notes, "
+                 "is the fact next to the id consistent with notes. Do NOT touch structure.")
     prev = ""
     for i in range(1, critic_rounds + 1):
         critique, approved, converged = _run_critic_round(
@@ -820,15 +831,15 @@ def _run_specialized_critics(query: str, writer: Assistant, writer_msgs: list,
             break
         prev = critique
         writer_msgs.append({"role": "user",
-                            "content": (f"FACT-КРИТИКА (только фактология):\n{critique}\n\n"
-                                        "Перепиши через write_draft + append_draft.")})
+                            "content": (f"FACT CRITIQUE (factuality only):\n{critique}\n\n"
+                                        "Rewrite via write_draft + append_draft.")})
         writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
         _normalize_draft_file()
 
     # Sub-phase B — structure-critic
-    struct_hint = ("ОБЯЗАТЕЛЬНО вызови read_draft. Проверяй ТОЛЬКО структуру и формат "
-                   "(7 секций, 6 тегов в '## Ключевые инсайты', плоские цитаты без backticks). "
-                   "Фактологию НЕ трогай.")
+    struct_hint = ("MANDATORY: call read_draft. Check ONLY structure and format "
+                   "(7 sections, 6 tags in '## Key Insights', flat citations without backticks). "
+                   "Do NOT touch factuality.")
     prev = ""
     for i in range(1, critic_rounds + 1):
         critique, approved, converged = _run_critic_round(
@@ -837,18 +848,19 @@ def _run_specialized_critics(query: str, writer: Assistant, writer_msgs: list,
             break
         prev = critique
         writer_msgs.append({"role": "user",
-                            "content": (f"STRUCTURE-КРИТИКА (только формат и структура):\n{critique}\n\n"
-                                        "Перепиши через write_draft + append_draft.")})
+                            "content": (f"STRUCTURE CRITIQUE (format and structure only):\n{critique}\n\n"
+                                        "Rewrite via write_draft + append_draft.")})
         writer_msgs.extend(_run_agent(writer, writer_msgs, "✍️ "))
         _normalize_draft_file()
 
 
 def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None:
-    """Фаза 2 (writer) + 3 (critic) + 4 (validator). Выделена для переиспользования
-    в resume_research: позволяет дописать отчёт если phase 1 уже прошла но draft пустой.
+    """Phase 2 (writer) + 3 (critic) + 4 (validator). Split out for reuse in
+    resume_research: lets us finish the report when phase 1 already ran but
+    the draft is empty.
     """
-    # Фаза 2 — writer
-    print("\n✍️  Фаза 2: writer — финальный черновик")
+    # Phase 2 — writer
+    print("\n✍️  Phase 2: writer — final draft")
     writer = build_bot(WRITER_PROMPT,
                        ["read_plan", "read_notes", "read_notes_focused", "read_synthesis", "read_draft",
                         "write_draft", "append_draft"],
@@ -856,85 +868,86 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
     kb_context = _build_kb_context(query)
     memory_context = _build_memory_context(query, "final report")
     memory_block = (
-        f"\n\nRelevant cross-session memory (используй только как вспомогательный контекст, "
-        f"не как замену notes/KB):\n{memory_context}"
+        f"\n\nRelevant cross-session memory (use only as auxiliary context, "
+        f"not as a replacement for notes/KB):\n{memory_context}"
         if memory_context else ""
     )
     status_block = "\n\n" + _build_status_context(query)
     writer_msgs = [{"role": "user",
-                    "content": (f"Собери финальный отчёт по теме: {query}\n\n"
-                                f"KB context (authoritative список источников — "
-                                f"используй id и repo ИМЕННО отсюда):\n{kb_context}"
+                    "content": (f"Assemble the final report on topic: {query}\n\n"
+                                f"KB context (authoritative list of sources — "
+                                f"use ids and repos ONLY from here):\n{kb_context}"
                                 f"{memory_block}{status_block}")}]
     t_wr = time.time()
     resp = _run_agent(writer, writer_msgs, "✍️ ")
     metrics.writer_seconds = time.time() - t_wr
     writer_msgs.extend(resp)
 
-    # Sanity-check: writer должен был вызвать write_draft. Если файл не создан или <200 симв —
-    # retry со строгим сообщением. Если и после retry пусто — fallback программно.
+    # Sanity check: writer was supposed to call write_draft. If the file is
+    # missing or <200 chars, retry with a strict message. If still empty
+    # after retry — fall back programmatically.
     def _draft_too_small() -> bool:
         return not DRAFT_PATH.exists() or DRAFT_PATH.stat().st_size < 200
 
     if _draft_too_small():
-        print("   ⚠️  writer не сохранил draft (или <200 симв) — retry со строгим сообщением")
+        print("   ⚠️  writer did not save a draft (or <200 chars) — retry with a strict message")
         writer_msgs.append({"role": "user", "content": (
-            "ПРОВАЛ: ты НЕ вызвал write_draft (либо получился слишком короткий черновик). "
-            "СЕЙЧАС же вызови write_draft с заголовком и '## Краткий ответ' (3-6 булетов "
-            "с [id] из KB context выше), затем append_draft для остальных секций по порядку: "
-            "'## Подходы', '## Бенчмарки и метрики', '## Реализации', '## Ключевые инсайты' "
-            "(6 тегов из synthesis.md), '## Открытые вопросы', '## Источники'. "
-            "НЕ отвечай текстом — используй инструменты.")})
+            "FAILURE: you did NOT call write_draft (or the draft is too short). "
+            "RIGHT NOW call write_draft with the title and '## TL;DR' (3-6 bullets "
+            "with [id] from the KB context above), then append_draft for the remaining "
+            "sections in order: '## Approaches', '## Benchmarks and Metrics', "
+            "'## Implementations', '## Key Insights' (6 tags from synthesis.md), "
+            "'## Open Questions', '## Sources'. Do NOT reply with text — use the tools.")})
         resp = _run_agent(writer, writer_msgs, "🔁")
         writer_msgs.extend(resp)
 
     if _draft_too_small():
-        print("   ❌ writer провалился и после retry — fallback на программный сбор из KB")
+        print("   ❌ writer failed even after retry — falling back to programmatic draft from KB")
         _fallback_draft_from_kb(query)
 
-    # Нормализация цитат: `[\`id\`](arxiv-id)` / `[\`id\`](repo: X)` → `[id]` / `[id, repo: X]`
+    # Citation normalization: `[`id`](arxiv-id)` / `[`id`](repo: X)` → `[id]` / `[id, repo: X]`
     if _normalize_draft_file():
-        print("   🧹 нормализованы цитаты в draft.md")
+        print("   🧹 citations normalized in draft.md")
 
-    # Фаза 3 — критика. Если CFG.specialized_critics=True (default) — два
-    # специализированных критика подряд (fact → structure), каждый со своим фокусом.
-    # Legacy-режим: один combined CRITIC_PROMPT.
+    # Phase 3 — critique. If CFG.specialized_critics=True (default) — two
+    # specialized critics in sequence (fact → structure), each with its own
+    # focus. Legacy mode: one combined CRITIC_PROMPT.
     if CFG.get("specialized_critics", True) and critic_rounds >= 1:
         _run_specialized_critics(query, writer, writer_msgs, metrics, critic_rounds)
     else:
         _run_legacy_critic(query, writer, writer_msgs, metrics, critic_rounds)
 
     if DRAFT_PATH.exists():
-        print("\n🔐 Фаза 4: валидация цитат (hf info + keyword overlap с notes)")
+        print("\n🔐 Phase 4: citation validation (hf info + keyword overlap with notes)")
         valid, invalid, suspicious = validate_draft_ids()
         metrics.valid_ids = valid
         metrics.invalid_ids = list(invalid)
         metrics.suspicious_citations = list(suspicious)
-        print(f"   ✓ валидных: {valid}")
+        print(f"   ✓ valid: {valid}")
         if invalid:
-            print(f"   ✗ не найдены: {invalid}")
-            print("   ⚠️  возможные галлюцинации — проверь вручную")
+            print(f"   ✗ not found: {invalid}")
+            print("   ⚠️  possible hallucinations — review manually")
         if suspicious:
-            print(f"   ⚠️  слабое совпадение цитаты с notes: {suspicious}")
-            print("       (id существует, но текст вокруг него в draft'е не отражает факты из notes)")
-        # P7: канонизируем ## Источники по body-цитатам, минус invalid_ids.
-        # Writer часто не обновляет этот раздел и в нём остаются галлюцинированные id.
+            print(f"   ⚠️  weak citation-to-notes overlap: {suspicious}")
+            print("       (id exists but the text around it in the draft does not reflect facts from notes)")
+        # P7: canonicalize ## Sources against body citations, minus invalid_ids.
+        # Writers often do not update this section and it keeps hallucinated ids.
         if _canonicalize_sources_file(list(invalid)):
             removed = ", ".join(invalid) if invalid else "0"
-            print(f"   🧾 канонизированы ## Источники (убрано invalid: {removed})")
-        # P9: если НИ ОДИН из critic-раундов не выдал approved=True, draft
-        # финализирован принудительно (critic'у не хватило раундов либо он
-        # не смог подтвердить). Вставляем явный warning-баннер в начало draft'а
-        # и отмечаем в metrics как ранний стоп по качеству.
+            print(f"   🧾 ## Sources canonicalized (removed invalid: {removed})")
+        # P9: if NO critic round returned approved=True the draft was
+        # finalized by force (not enough rounds or critic could not confirm).
+        # Prepend an explicit warning banner to the draft and mark metrics
+        # as an early stop by quality.
         approved_any = any(getattr(cr, "approved", False) for cr in metrics.critic_rounds)
         if metrics.critic_rounds and not approved_any:
             n = len(metrics.critic_rounds)
             _prepend_unapproved_banner(n, invalid, suspicious)
             if not metrics.stopped_early_reason:
                 metrics.stopped_early_reason = f"CRITIC_UNAPPROVED_AFTER_{n}_ROUNDS"
-            print(f"   ⚠️  P9: draft НЕ approved после {n} critic-раундов — "
-                  f"вставлен warning-баннер, stopped_early_reason={metrics.stopped_early_reason}")
-        # HITL pause-point: даём пользователю шанс ткнуть «перепиши про X» до финализации.
+            print(f"   ⚠️  P9: draft NOT approved after {n} critic rounds — "
+                  f"warning banner prepended, stopped_early_reason={metrics.stopped_early_reason}")
+        # HITL pause-point: let the user say 'rewrite X' before finalizing.
         _hitl_review(query, writer, writer_msgs, valid, invalid, suspicious)
         metrics.final_draft_chars = DRAFT_PATH.stat().st_size
         quality = summarize_evidence_quality(
@@ -944,12 +957,12 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
         )
         for key, value in quality.items():
             setattr(metrics, key, value)
-        print(f"\n📄 Итог: {DRAFT_PATH}\n" + "─" * 60)
+        print(f"\n📄 Result: {DRAFT_PATH}\n" + "─" * 60)
         print(DRAFT_PATH.read_text(encoding='utf-8'))
         print("─" * 60)
-        print(f"Файлы: {NOTES_PATH.name}, {PLAN_PATH.name}, {DRAFT_PATH.name}")
+        print(f"Files: {NOTES_PATH.name}, {PLAN_PATH.name}, {DRAFT_PATH.name}")
     else:
-        print("⚠️  writer не сохранил черновик")
+        print("⚠️  writer did not save a draft")
 
     try:
         research_memory_mod.record_run_memory(
@@ -961,35 +974,35 @@ def _finalize_draft(query: str, metrics: RunMetrics, critic_rounds: int) -> None
             lessons_tail=_latest_lessons_tail(),
         )
     except Exception as exc:
-        log.warning("не удалось записать run-summary memory (%s)", exc)
+        log.warning("failed to record run-summary memory (%s)", exc)
 
-    # Всегда сохраняем метрики — даже если draft не создался
+    # Always save metrics — even if the draft was not created.
     metrics_path = metrics.finish()
-    print(f"📊 Метрики прогона: {metrics_path.relative_to(RESEARCH_DIR.parent)} "
-          f"({metrics.total_seconds:.1f}с, {len(metrics.iterations)} итераций)")
+    print(f"📊 Run metrics: {metrics_path.relative_to(RESEARCH_DIR.parent)} "
+          f"({metrics.total_seconds:.1f}s, {len(metrics.iterations)} iterations)")
 
 
 def resume_research(query: str | None = None, critic_rounds: int = 2):
-    """Продолжает прерванный прогон: пропускает explorer/replanner, использует
-    существующие notes.md/plan.md/kb.jsonl/synthesis.md и идёт сразу к writer/critic.
+    """Continues an interrupted run: skips explorer/replanner, uses existing
+    notes.md/plan.md/kb.jsonl/synthesis.md and goes straight to writer/critic.
 
-    Если synthesis.md отсутствует — запускает только фазу синтеза, затем writer.
-    Query берётся из plan.md если не задан явно.
+    If synthesis.md is missing, it runs only the synthesis phase, then writer.
+    Query is restored from plan.md when not given explicitly.
     """
-    # Восстанавливаем query из plan.md если не передан
+    # Restore query from plan.md if not passed.
     if query is None and PLAN_PATH.exists():
         for ln in PLAN_PATH.read_text(encoding="utf-8").splitlines():
             if ln.startswith("# Plan:"):
                 query = ln.replace("# Plan:", "").strip()
                 break
     if not query:
-        raise RuntimeError("не могу восстановить query: передай явно или убедись что plan.md существует")
+        raise RuntimeError("cannot restore query: pass it explicitly or ensure plan.md exists")
 
     from lra import tool_tracker
     tool_tracker.reset_tracker()
-    tool_tracker.set_tool_budget("compact_notes", 4)  # предотвращает compact_notes loop
-    print(f"🔄 RESUME: продолжаем прогон по теме: {query}")
-    print(f"📁 Рабочая папка: {RESEARCH_DIR}")
+    tool_tracker.set_tool_budget("compact_notes", 4)  # prevents compact_notes loop
+    print(f"🔄 RESUME: continuing run on topic: {query}")
+    print(f"📁 Working directory: {RESEARCH_DIR}")
     have = {
         "notes.md": NOTES_PATH.exists() and NOTES_PATH.stat().st_size > 100,
         "plan.md": PLAN_PATH.exists(),
@@ -999,18 +1012,18 @@ def resume_research(query: str | None = None, critic_rounds: int = 2):
     for k, v in have.items():
         print(f"   {'✓' if v else '✗'} {k}")
     if not have["notes.md"]:
-        raise RuntimeError("notes.md пуст или отсутствует — нечего продолжать, запусти новый research")
+        raise RuntimeError("notes.md is empty or missing — nothing to continue, start a new research")
 
     metrics = RunMetrics(query=query)
 
     if not have["synthesis.md"]:
-        print("\n💡 synthesis.md отсутствует — запускаем фазу синтеза")
+        print("\n💡 synthesis.md missing — running synthesis phase")
         synthesizer = build_bot(SYNTHESIZER_PROMPT,
                                 ["read_plan", "read_notes", "write_synthesis", "kb_search"],
                                 max_tokens=4096)
         t_syn = time.time()
         _run_agent(synthesizer,
-                   [{"role": "user", "content": f"Произведи пять типов инсайтов по теме: {query}"}],
+                   [{"role": "user", "content": f"Produce the six insight blocks on the topic: {query}"}],
                    "💡")
         metrics.synthesis_seconds = time.time() - t_syn
 
