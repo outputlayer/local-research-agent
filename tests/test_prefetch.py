@@ -5,11 +5,11 @@ from lra.cli import CliResult
 
 
 def test_prefetch_runs_hf_and_gh_in_parallel(monkeypatch):
-    """prefetch must call hf+gh in parallel: 2 sequential 0.1s requests ≈ 0.1s, not 0.2s."""
+    """prefetch must call hf+gh in parallel: 2 parallel 0.3s requests ≈ 0.3s, not 0.6s."""
     from lra import pipeline
 
     def slow_hf_or_gh(cmd, **kw):
-        time.sleep(0.1)
+        time.sleep(0.3)
         return CliResult('[]', '', 0)
 
     monkeypatch.setattr(pipeline.cli_run, "run", slow_hf_or_gh)
@@ -20,8 +20,9 @@ def test_prefetch_runs_hf_and_gh_in_parallel(monkeypatch):
 
     assert pf["hf"] is True
     assert pf["gh"] is True
-    # 2 parallel 0.1s must take ~0.1s + overhead, but substantially less than 0.2s
-    assert elapsed < 0.18, f"expected parallel execution (<0.18s), got {elapsed:.3f}s"
+    # 2 parallel 0.3s must take ~0.3s + overhead, but substantially less than 0.6s
+    # Threshold 0.5s leaves room for slow CI runners while still catching serial execution.
+    assert elapsed < 0.5, f"expected parallel execution (<0.5s), got {elapsed:.3f}s"
 
 
 def test_prefetch_reports_cache_hits(monkeypatch, tmp_path):
