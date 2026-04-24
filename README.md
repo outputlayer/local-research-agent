@@ -1,112 +1,139 @@
 # local-research-agent
 
-Локальный научный research-агент на Apple Silicon: **MLX + Qwen3.5-9B-4bit + Qwen-Agent**. Без облаков, без API-ключей, единственный внешний источник — Hugging Face Papers через `hf` CLI.
+A local, self-contained research agent for Apple Silicon: **MLX + Qwen-Agent + Hugging Face Papers / arXiv / Semantic Scholar / GitHub**. No cloud LLM, no API keys required beyond public data sources. One command turns a free-form topic into a cited, critic-reviewed Markdown report.
 
-## Что делает
+## What it does
 
-Один режим — кроличья нора по научной теме. За один запуск проходит 7 фаз:
+Given a topic, the agent runs a multi-stage pipeline and writes `research/draft.md`:
 
 ```
-explorer ↔ replanner  (×depth, адаптивный план)
-          ↓
-     compressor  (если notes > 8000 симв)
-          ↓
-     synthesizer  (5 типов инсайтов: мосты / противоречия / пробелы / экстраполяции / testable)
-          ↓
-     writer ↔ critic  (×rounds, с проверкой конвергенции)
-          ↓
-     validator  (arXiv-id через `hf papers info` + keyword overlap draft↔notes)
+bootstrap planner        produce a topic-specific plan.md (vocab + 5 initial tasks)
+        ↓
+explorer ↔ replanner     ×depth iterations, adaptive plan
+        ↓
+compressor               if notes.md > 8 KB
+        ↓
+synthesizer              bridges / contradictions / gaps / extrapolations / testable
+        ↓
+writer ↔ critic          ×rounds, with convergence and approval tracking
+        ↓
+validator                arXiv-id existence + keyword overlap between draft and notes
+        ↓
+canonicalizer            normalize ## Sources against body citations, drop invalid ids
 ```
 
-На выходе: `research/draft.md` с Novel Insights и нумерованными источниками, а в `research/archive/<timestamp>_<slug>/` — снапшот всех артефактов прогона.
+Artifacts land in `research/` and a timestamped copy is archived under `research/archive/<slug>/`.
 
-## Ключевые фичи
+## Key features
 
-- **Модульная архитектура**: пакет `lra/` — config, utils, memory, llm, tools, prompts, validator, pipeline. CLI `agent.py` тонкий
-- **Покрытие тестами**: 35 pytest-тестов (utils / memory / validator / smoke), запускаются без MLX за ~1с
-- **Одна загрузка модели** через глобальный кэш `_MLX_CACHE` — 6 ролей/агентов делят веса
-- **Кросс-сессионная Reflexion-память**: `lessons.md` и `querylog.md` не стираются между запусками
-- **Querylog enforcement**: `hf_papers` возвращает отказ на точный дубль запроса → модель вынуждена переформулировать
-- **Info-gain early stop**: если 2 итерации подряд дают <2 новых arXiv-id, ранний выход
-- **Адаптивный replanner**: после каждой итерации explorer'а переписывает `plan.md` со структурой `[FOCUS] / Digest / Direction check / [TODO] / [DONE]`
-- **Critic convergence**: цикл writer↔critic выходит если жаккард-сходство соседних критик >70%
-- **Валидатор цитат**: проверяет существование arXiv-id и семантическую связь текста вокруг id в draft'е с фактами в notes
+- **Modular package** — `lra/` is split into `config`, `llm`, `tools`, `pipeline`, `plan`, `validator`, `memory`, `research_memory`, `metrics`, `kb`, `cache`. `agent.py` is a thin REPL.
+- **Single MLX weight load** — all six agent roles share one copy of the model via a global cache.
+- **Cross-session Reflexion memory** — `lessons.md`, `querylog.md`, and per-run summaries in `research/memory/` persist across runs and are only cleared by `/forget`.
+- **Knowledge base** — append-only `kb.jsonl` atoms (papers, repos) with dedup on `(kind, id)` and title-collision detection (`kb_collisions.jsonl`).
+- **Query enforcement** — `hf_papers`, `arxiv_search`, `github_search`, and `semantic_scholar_search` reject exact duplicate queries, forcing the model to rephrase.
+- **Adaptive replanner** — rewrites `plan.md` each iteration with `[FOCUS] / Digest / [IN_PROGRESS] / [TODO] / [DONE]`.
+- **Specialized critics** — separate fact-critic and structure-critic, or a combined legacy critic, with Jaccard-convergence and an explicit `APPROVED` token.
+- **Citation validator** — every `[arxiv-id]` in the draft must resolve and its surrounding text must overlap with notes.
+- **Source canonicalization** — `## Sources` is rebuilt from the body so the writer cannot silently drift.
+- **Unapproved-draft banner** — if no critic round ever emits `APPROVED`, a warning block is prepended to `draft.md` and `stopped_early_reason=CRITIC_UNAPPROVED_AFTER_N_ROUNDS` is written to `metrics.json`.
+- **Wall-clock safety nets** — per-iteration cap (`iter_wall_clock_limit_s`, default 900 s) and per-agent-call caps (`max_agent_turns=24`, `agent_call_wall_clock_s=420`) protect against MLX tool-loop stalls.
 
-## Tools (14)
+## Requirements
 
-`hf_papers`, `read/write/append_draft`, `read/append_notes`, `compact_notes`, `read/write_plan`, `read/write_synthesis`, `read/append_lessons`, `read_querylog`.
+- Apple Silicon (M1 or newer)
+- Python ≥ 3.12 (3.14 tested)
+- [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli) on `PATH`
+- Optional: GitHub Personal Access Token in `GH_TOKEN` for `github_search`
 
-## Установка
-
-Требуется Apple Silicon, Python ≥3.10, [`hf` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli):
+## Install
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-# модель подтянется при первом запуске (~5 GB)
 python agent.py
 ```
 
-Первый запуск скачает `mlx-community/Qwen3.5-9B-MLX-4bit` (в HF-кэш, сам репо ничего не хранит).
+On first run the default model (`mlx-community/Qwen3.5-9B-MLX-4bit`, ~5 GB) is downloaded into the standard Hugging Face cache. The repository itself stores nothing large.
 
-## Команды
-
-```
-<тема>     — запустить research_loop по теме
-/clean     — очистить рабочую папку (lessons/querylog глобальные, НЕ трогаются)
-/forget    — полный сброс памяти (включая глобальные lessons/querylog)
-/exit      — выход
-```
-
-По умолчанию: `depth=6` итераций, `critic_rounds=2`. Меняется в `main()`.
-
-## Структура
+## REPL commands
 
 ```
-agent.py              — тонкий CLI (входная точка)
-chat_config.json      — модель, температура, max_tokens, max_history
-requirements.txt      — mlx-lm, qwen-agent, json5, pytest
-lra/                  — пакет с логикой
-  config.py           — конфиг + пути артефактов
-  utils.py            — чистые функции (parse_args, keyword_set, jaccard, count_arxiv_ids)
-  memory.py           — Reflexion-память (seen_queries, archive, reset)
-  llm.py              — MLX-бэкенд для qwen-agent + кэш весов
-  tools.py            — 15 tools (@register_tool)
-  prompts.py          — промпты 6 ролей
-  validator.py        — проверка arXiv-id и keyword-overlap
-  pipeline.py         — research_loop, build_bot, фазы
-tests/
-  test_utils.py       — 14 тестов
-  test_memory.py      — 8 тестов (через tmp_path)
-  test_validator.py   — 5 тестов (с инжекцией текста)
-  test_smoke.py       — 5 smoke-тестов (не грузит MLX)
-research/             — рабочая папка (gitignored)
-  draft.md            — финальный отчёт (stdout тоже)
-  notes.md            — накопленные факты с [arxiv-id]
-  plan.md             — живой план с [FOCUS]/[TODO]/[DONE]
-  synthesis.md        — пять тегов инсайтов
-  lessons.md          ★ Reflexion-память между сессиями
-  querylog.md         ★ уже выполненные hf_papers запросы
-  archive/            — снапшоты прошлых прогонов
+<any topic>     run research_loop on the topic
+/clean          wipe the working research/ folder (lessons/querylog preserved)
+/forget         full memory reset, including lessons and querylog
+/hitl on|off    toggle human-in-the-loop review after the validator
+/resume         resume a crashed run from the existing notes.md/kb.jsonl
+/exit           quit
 ```
 
-★ — глобальные, переживают `/clean`.
+Defaults: `depth=6`, `critic_rounds=2`. Override in `main()` or call `research_loop()` directly from Python.
 
-## Тесты
+## Non-interactive usage
+
+```python
+from lra.pipeline import research_loop, resume_research
+
+research_loop("adversarial attacks on LLM agents", depth=6, critic_rounds=2)
+# after a crash:
+resume_research()
+```
+
+## Runtime flags
+
+Set in `chat_config.json` under `"extra"` or at runtime via `CFG["flag"] = value`.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `notes_strict` | `true` | Block `append_notes` on unknown arxiv-ids |
+| `strict_domain_gate` | `true` | Require ≥ 2 overlap with `plan.md` header vocabulary |
+| `specialized_critics` | `true` | Fact-critic + structure-critic instead of combined critic |
+| `dynamic_initial_plan` | `true` | LLM-bootstrapped topic-specific plan (fallback to static 5-seed) |
+| `hitl` | `false` | Pause for human review after the validator |
+| `iter_wall_clock_limit_s` | `900` | Halt if one iteration exceeds this budget (`0` disables) |
+| `max_agent_turns` | `24` | Max tool-loop turns per `_run_agent` call (`0` disables) |
+| `agent_call_wall_clock_s` | `420` | Max wall-clock seconds per `_run_agent` call (`0` disables) |
+
+## Project layout
+
+```
+agent.py                       thin CLI / REPL
+chat_config.json               model, temperature, max_tokens, runtime flags
+requirements.txt               pinned dependencies
+lra/
+  config.py                    typed Settings + artifact paths
+  llm.py                       MLX backend + weight cache
+  tools.py                     @register_tool functions (hf_papers, arxiv, github, kb, plan...)
+  prompts.py                   prompts for explorer / replanner / synthesizer / writer / critic / validator
+  plan.py                      plan.json source of truth
+  pipeline.py                  research_loop, build_bot, phases
+  validator.py                 arxiv-id + overlap validation
+  kb.py                        append-only knowledge base + collision detection
+  memory.py                    short-term run memory
+  research_memory.py           cross-session Reflexion memory
+  metrics.py                   RunMetrics, IterationMetric, CriticRound
+  cache.py, logger.py, tool_tracker.py, utils.py
+tests/                         257+ tests, run without MLX, ~1 s
+research/                      working directory (gitignored)
+  draft.md, notes.md, plan.md, plan.json, synthesis.md,
+  kb.jsonl, kb_collisions.jsonl, lessons.md, querylog.md,
+  rejected.jsonl, metrics.json
+  archive/                     timestamped snapshots of completed runs
+```
+
+## Development
 
 ```bash
-pytest tests/ -v   # 35 тестов, ~1 секунда, без MLX
+source .venv/bin/activate
+ruff check lra tests agent.py
+python -m pytest -q
 ```
 
-## Что НЕ включено
+A commit should pass both. See [AGENTS.md](AGENTS.md) for the full contract used by AI assistants working on this repo.
 
-Намеренно отброшено как overkill для 9B модели:
+## Status
 
-- Tree-of-Thoughts (ветвление × 3-5 → быстрые галлюцинации)
-- Multi-agent negotiation (у нас и так 6 специализированных ролей)
-- RLHF / continual learning (нет датасета оценок)
-- HTTP-сервер для MLX (своя обёртка `MlxLLM(BaseFnCallModel)` — без лишнего hop'а)
+Actively maintained, single-developer project. Tests: **257 passing** at `3f40073`.
 
-## Лицензия
+## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).

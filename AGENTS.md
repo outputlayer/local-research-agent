@@ -71,6 +71,8 @@ python -c "from lra.pipeline import resume_research; resume_research()"
 | `dynamic_initial_plan` | `True` | LLM-bootstrap topic-aware seeds перед Phase 1; fallback на статический 5-seed plan при любой ошибке парсинга/LLM |
 | `hitl` | `False` | Human-in-the-loop пауза после validator'а (REPL: `/hitl on`) |
 | `iter_wall_clock_limit_s` | `900` | P10: если итерация длилась > N секунд (prefetch+explorer+replanner), halt с `stopped_early_reason=ITER_WALL_CLOCK`. Установи `0` чтобы выключить. |
+| `max_agent_turns` | `24` | P11: max tool-loop turns в одном `_run_agent`. Защита от MLX pathological ReACT-петель. `0` выключает. |
+| `agent_call_wall_clock_s` | `420` | P11: max wall-clock seconds на один `_run_agent`-вызов. `0` выключает. |
 
 ## При любом изменении — прогон
 
