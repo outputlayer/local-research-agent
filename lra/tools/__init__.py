@@ -20,9 +20,9 @@ from .. import plan as plan_mod  # noqa: F401
 
 # Paths re-exported for backwards-compatible monkeypatch surface
 # (tests do `monkeypatch.setattr(tools, "NOTES_PATH", ...)`).
-# Implementation code читает эти константы через `from .. import config as _cfg`,
-# поэтому сами патчи на tools.X — no-op но сохранены для совместимости тестов,
-# которые парно патчат и config, и tools.
+# Implementation code reads these constants via `from .. import config as _cfg`,
+# so patches on tools.X are no-ops but are preserved for compatibility with tests
+# that pair-patch both config and tools.
 from ..config import (
     ARXIV_RECENT_DAYS,
     CFG,
