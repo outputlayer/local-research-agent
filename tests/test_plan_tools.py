@@ -1,5 +1,5 @@
-"""Тесты plan_add_task / plan_close_task / plan_split_task —
-единственный легитимный способ модели мутировать план."""
+"""Tests for plan_add_task / plan_close_task / plan_split_task —
+the only legitimate way for the model to mutate the plan."""
 from __future__ import annotations
 
 import pytest
@@ -13,13 +13,13 @@ def plan_tools_env(tmp_path, monkeypatch):
     monkeypatch.setattr(plan, "RESEARCH_DIR", tmp_path)
     monkeypatch.setattr(plan, "PLAN_PATH", tmp_path / "plan.md")
     monkeypatch.setattr(plan, "PLAN_JSON_PATH", tmp_path / "plan.json")
-    # tools.plan_mod — тот же объект, патчи применяются автоматически через attr-access
+    # tools.plan_mod is the same object; patches apply automatically via attr-access
     return plan, tools, tmp_path
 
 
 def test_plan_add_task_without_plan_returns_error(plan_tools_env):
     _, tools, _ = plan_tools_env
-    out = tools.PlanAddTask().call({"title": "без плана"})
+    out = tools.PlanAddTask().call({"title": "no plan"})
     assert "error" in out.lower()
 
 
@@ -28,14 +28,14 @@ def test_plan_add_task_adds_emerged_child(plan_tools_env):
     p = plan.reset("root topic")
     parent_id = p.tasks[0].id
     out = tools.PlanAddTask().call({
-        "title": "всплывшая подтема",
+        "title": "emerged subtopic",
         "parent": parent_id,
-        "why": "встретили в абстракте",
+        "why": "seen in the abstract",
     })
     assert "added" in out
     reloaded = plan.load()
     assert reloaded is not None
-    child = next((t for t in reloaded.tasks if t.title == "всплывшая подтема"), None)
+    child = next((t for t in reloaded.tasks if t.title == "emerged subtopic"), None)
     assert child is not None
     assert child.parent == parent_id
     assert child.origin == "emerged"
@@ -48,7 +48,7 @@ def test_plan_close_task_marks_done_with_evidence(plan_tools_env):
     out = tools.PlanCloseTask().call({
         "id": tid,
         "evidence": "2401.00001, kb:Paper_Alpha",
-        "why": "3 факта в notes",
+        "why": "3 facts in notes",
     })
     assert "closed" in out
     reloaded = plan.load()
@@ -64,8 +64,8 @@ def test_plan_split_task_creates_children(plan_tools_env):
     tid = p.tasks[2].id
     out = tools.PlanSplitTask().call({
         "id": tid,
-        "subtitles": "под A | под B | под C",
-        "why": "слишком широко",
+        "subtitles": "sub A | sub B | sub C",
+        "why": "too broad",
     })
     assert "split" in out
     reloaded = plan.load()
@@ -79,7 +79,7 @@ def test_plan_split_task_rejects_single_subtitle(plan_tools_env):
     plan.reset("x")
     out = tools.PlanSplitTask().call({
         "id": "T1",
-        "subtitles": "только одна подзадача",
+        "subtitles": "only one subtask",
     })
     assert "error" in out.lower()
 
@@ -87,7 +87,7 @@ def test_plan_split_task_rejects_single_subtitle(plan_tools_env):
 def test_plan_add_task_respects_max_open_limit(plan_tools_env):
     plan, tools, _ = plan_tools_env
     p = plan.reset("x")
-    # заполняем до лимита
+    # fill up to the limit
     while len(p.open_tasks()) < plan.MAX_OPEN_TASKS:
         p.add_task("filler", origin="emerged")
     plan.save(p)

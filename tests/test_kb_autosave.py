@@ -1,5 +1,5 @@
-"""Автосейв результатов hf_papers/github_search в kb.jsonl — модель часто забывает
-kb_add вручную, KB должен заполняться сам."""
+"""Auto-save of hf_papers/github_search results into kb.jsonl — the model often forgets
+to call kb_add manually; KB must populate itself."""
 from __future__ import annotations
 
 import json
@@ -16,8 +16,8 @@ def _patch(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "RESEARCH_DIR", tmp_path)
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / ".cache")
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / ".cache")
-    # Gate в hf_papers читает PLAN_PATH → нужно изолировать от реального
-    # research/plan.md (он может содержать EW-тему и рубить тестовые fake papers).
+    # The hf_papers gate reads PLAN_PATH → isolate from the real
+    # research/plan.md (may contain EW topic and cut test fake papers).
     monkeypatch.setattr(config, "PLAN_PATH", tmp_path / "plan.md")
     monkeypatch.setattr(tools, "PLAN_PATH", tmp_path / "plan.md")
     return kb
@@ -67,7 +67,7 @@ def test_github_search_autosaves_repos_above_threshold(tmp_path, monkeypatch):
                return_value=CliResult(json.dumps(fake_repos), "", 0)):
         out = tools.GithubSearch().call(
             {"query": "totally distinct github topic beta", "type": "repos", "limit": 5})
-    # Только репо с stars >= 10 должен попасть в kb
+    # Only repos with stars >= 10 should land in kb
     assert "auto-saved to kb: 1" in out
     atoms = kb.load()
     assert len(atoms) == 1
@@ -90,5 +90,5 @@ def test_github_search_code_does_not_autosave(tmp_path, monkeypatch):
                return_value=CliResult(json.dumps(fake_code), "", 0)):
         out = tools.GithubSearch().call(
             {"query": "code-only different search gamma", "type": "code", "limit": 3})
-    assert "авто-сохранено" not in out
+    assert "auto-saved" not in out
     assert kb.load() == []

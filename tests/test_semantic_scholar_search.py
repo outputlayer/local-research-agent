@@ -1,4 +1,4 @@
-"""SemanticScholarSearch: парсинг JSON, дедуп, kb auto-save через arxiv-id."""
+"""SemanticScholarSearch: JSON parsing, dedup, kb auto-save via arxiv-id."""
 
 import json
 
@@ -21,9 +21,9 @@ def _payload(*items):
 
 
 def test_s2_basic_parse_and_autosave(tmp_path, monkeypatch):
-    """Один paper c arxiv-id → отображается, авто-сохраняется в kb."""
+    """One paper with arxiv-id → shown, auto-saved to kb."""
     tools = _patch(tmp_path, monkeypatch)
-    # plan.md — пустой → strict_domain_gate пропустит (slow-start)
+    # plan.md is empty → strict_domain_gate allows through (slow-start)
     (tmp_path / "plan.md").write_text("# Plan: radar jamming\n", encoding="utf-8")
     tool = tools.SemanticScholarSearch()
     raw = _payload({
@@ -50,7 +50,7 @@ def test_s2_basic_parse_and_autosave(tmp_path, monkeypatch):
 
 
 def test_s2_no_arxiv_not_saved(tmp_path, monkeypatch):
-    """Paper без arxiv-id → отображается, но НЕ сохраняется в kb."""
+    """Paper without arxiv-id → shown but NOT saved to kb."""
     tools = _patch(tmp_path, monkeypatch)
     (tmp_path / "plan.md").write_text("# Plan: x\n", encoding="utf-8")
     tool = tools.SemanticScholarSearch()
@@ -60,7 +60,7 @@ def test_s2_no_arxiv_not_saved(tmp_path, monkeypatch):
         "abstract": "Some NLP paper.",
         "year": 2024,
         "authors": [{"name": "X"}],
-        "externalIds": {},  # нет ArXiv
+        "externalIds": {},  # no ArXiv
     })
     monkeypatch.setattr(tools._helpers, "_fetch_text", lambda url, timeout=20: raw)
 
@@ -68,13 +68,13 @@ def test_s2_no_arxiv_not_saved(tmp_path, monkeypatch):
 
     assert "[s2:no-arxiv-1]" in out
     assert "without arxiv-id (not saved): 1" in out
-    # kb пустой
+    # kb empty
     assert not (tmp_path / "kb.jsonl").exists() or \
            (tmp_path / "kb.jsonl").read_text().strip() == ""
 
 
 def test_s2_dedup_blocks_repeat(tmp_path, monkeypatch):
-    """Повторный вызов с тем же query → REJECTED через querylog."""
+    """Repeat call with the same query → REJECTED via querylog."""
     tools = _patch(tmp_path, monkeypatch)
     (tmp_path / "plan.md").write_text("# Plan: x\n", encoding="utf-8")
     tool = tools.SemanticScholarSearch()
@@ -90,7 +90,7 @@ def test_s2_dedup_blocks_repeat(tmp_path, monkeypatch):
 
 
 def test_s2_invalid_year_dropped(tmp_path, monkeypatch):
-    """Мусор в year (инъекция) не попадает в URL."""
+    """Junk in year (injection) does not end up in the URL."""
     tools = _patch(tmp_path, monkeypatch)
     (tmp_path / "plan.md").write_text("# Plan: x\n", encoding="utf-8")
     tool = tools.SemanticScholarSearch()
@@ -109,7 +109,7 @@ def test_s2_invalid_year_dropped(tmp_path, monkeypatch):
 
 
 def test_s2_empty_results(tmp_path, monkeypatch):
-    """API вернул пустой data → дружелюбное сообщение."""
+    """API returned empty data → friendly message."""
     tools = _patch(tmp_path, monkeypatch)
     (tmp_path / "plan.md").write_text("# Plan: x\n", encoding="utf-8")
     tool = tools.SemanticScholarSearch()

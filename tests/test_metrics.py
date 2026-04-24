@@ -1,4 +1,4 @@
-"""Тесты метрик итераций и парсера критики."""
+"""Tests for iteration metrics and critic parser."""
 import json
 
 from lra.metrics import (
@@ -17,18 +17,18 @@ def test_count_critic_issues_approved():
 
 
 def test_count_critic_issues_bullets():
-    text = """Вот правки:
-- нет цитаты в параграфе 1
-- дублирование абзаца
-- SMART_PLAGIARISM в секции X
+    text = """Here are the fixes:
+- no citation in paragraph 1
+- duplication of paragraph
+- SMART_PLAGIARISM in section X
 """
     assert count_critic_issues(text) == 3
 
 
 def test_count_critic_issues_numbered():
-    text = """1. переформулировать
-2. добавить [arxiv-id]
-3. удалить дубль"""
+    text = """1. rephrase
+2. add [arxiv-id]
+3. remove duplicate"""
     assert count_critic_issues(text) == 3
 
 

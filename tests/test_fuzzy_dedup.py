@@ -1,6 +1,6 @@
-"""Тесты fuzzy-dedup для защиты от перефразировок — реальная проблема из
-research/querylog.md от 2026-04-21 (WebWeaver/AgentCPM запросы повторялись
-8+ раз с минимальными изменениями и проходили точный dedup)."""
+"""Tests for fuzzy-dedup protection against paraphrases — a real issue seen in
+research/querylog.md on 2026-04-21 (WebWeaver/AgentCPM queries repeated
+8+ times with minor variations and slipped past exact dedup)."""
 from __future__ import annotations
 
 
@@ -20,16 +20,16 @@ def test_fuzzy_catches_word_order_permutation(tmp_path, monkeypatch):
     m = _setup(tmp_path, monkeypatch, [
         "gh-repos: WebWeaver agent planner writer python stars pushedAt",
     ])
-    # Перестановка + синоним — реальный случай из querylog
+    # Permutation + synonym — a real case from querylog
     hit = m.is_similar_to_seen("gh-repos: WebWeaver agent python planner writer pushedAt stars")
-    assert hit is not None, "fuzzy должен ловить перестановку слов"
+    assert hit is not None, "fuzzy must catch word permutations"
 
 
 def test_fuzzy_catches_added_noise_words(tmp_path, monkeypatch):
     m = _setup(tmp_path, monkeypatch, [
         "gh-repos: AgentCPM github repository python stars",
     ])
-    # Добавлены "pushedAt" и "framework" — но основа та же
+    # Added "pushedAt" and "framework" — but the base is the same
     hit = m.is_similar_to_seen("gh-repos: AgentCPM github repository python stars pushedAt framework")
     assert hit is not None
 
@@ -38,7 +38,7 @@ def test_fuzzy_allows_truly_different_topic(tmp_path, monkeypatch):
     m = _setup(tmp_path, monkeypatch, [
         "gh-repos: WebWeaver agent planner writer python",
     ])
-    # Совсем другая тема
+    # Completely different topic
     hit = m.is_similar_to_seen("hf_papers: reinforcement learning from human feedback alignment")
     assert hit is None
 
@@ -47,7 +47,7 @@ def test_fuzzy_ignores_short_queries(tmp_path, monkeypatch):
     m = _setup(tmp_path, monkeypatch, [
         "gh-repos: quick",
     ])
-    # Очень короткий запрос (< 3 keyword tokens) — не блокируем
+    # Very short query (< 3 keyword tokens) — do not block
     assert m.is_similar_to_seen("gh-repos: quick test x") is None
 
 

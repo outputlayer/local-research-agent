@@ -1,4 +1,4 @@
-"""P8: kb collision detection по title."""
+"""P8: kb collision detection by title."""
 from lra import kb
 
 
@@ -10,7 +10,7 @@ def _patch(tmp_path, monkeypatch):
 
 
 def test_no_collision_identical_title(tmp_path, monkeypatch):
-    """Та же arxiv-id с тем же title → коллизии нет."""
+    """Same arxiv-id with the same title → no collision."""
     _patch(tmp_path, monkeypatch)
     kb.add(kb.Atom(id="2401.00001", kind="paper", topic="t",
                    title="State Space Models for Radar", claim="c1"))
@@ -21,7 +21,7 @@ def test_no_collision_identical_title(tmp_path, monkeypatch):
 
 
 def test_collision_different_title_logged(tmp_path, monkeypatch):
-    """Та же id с резко отличным title → запись в kb_collisions.jsonl."""
+    """Same id with a drastically different title → entry written to kb_collisions.jsonl."""
     _patch(tmp_path, monkeypatch)
     kb.add(kb.Atom(id="2602.10434", kind="paper", topic="t",
                    title="Benchmarking DL for Landmine Detection", claim="c1"))
@@ -37,16 +37,16 @@ def test_collision_different_title_logged(tmp_path, monkeypatch):
 
 
 def test_empty_title_no_collision(tmp_path, monkeypatch):
-    """Пустой title не триггерит коллизию."""
+    """Empty title does not trigger a collision."""
     _patch(tmp_path, monkeypatch)
     kb.add(kb.Atom(id="2401.00002", kind="paper", topic="t", title="", claim="c1"))
     kb.add(kb.Atom(id="2401.00002", kind="paper", topic="t", title="Some Paper", claim="c2"))
-    # Нет prior title → коллизии не должно быть
+    # No prior title → must not be a collision
     assert not (tmp_path / "kb_collisions.jsonl").exists()
 
 
 def test_load_dedup_keeps_last(tmp_path, monkeypatch):
-    """load() по-прежнему дедуплицирует — последняя запись побеждает."""
+    """load() still deduplicates — the last entry wins."""
     _patch(tmp_path, monkeypatch)
     kb.add(kb.Atom(id="2401.00003", kind="paper", topic="t",
                    title="Title A", claim="claim A"))

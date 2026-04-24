@@ -1,4 +1,4 @@
-"""Юниты для Settings (валидация конфига) и CLI-кеша."""
+"""Unit tests for Settings (config validation) and the CLI cache."""
 import json
 
 import pytest
@@ -53,7 +53,7 @@ def test_cache_ttl_expires(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
     cmd = ["hf", "x"]
     cache.put(cmd, "old", "", 0)
-    # ttl=0ч → любой результат считается протухшим
+    # ttl=0h → any result is considered stale
     assert cache.get(cmd, ttl_hours=0) is None
 
 

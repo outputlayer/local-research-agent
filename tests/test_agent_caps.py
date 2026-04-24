@@ -1,4 +1,4 @@
-"""P11: soft-caps в _run_agent защищают от MLX zavисаний."""
+"""P11: soft-caps in _run_agent protect from MLX hangs."""
 import time
 from unittest.mock import MagicMock
 
@@ -7,7 +7,7 @@ from lra.config import CFG
 
 
 class _FakeBot:
-    """Минимальный stub Assistant: генератор resp-ов по одному."""
+    """Minimal Assistant stub: a response generator, one at a time."""
     def __init__(self, n_turns=100):
         self.n_turns = n_turns
 
@@ -19,7 +19,7 @@ class _FakeBot:
 def test_max_agent_turns_caps_loop(monkeypatch, capsys):
     monkeypatch.setitem(CFG.extra, "max_agent_turns", 3)
     monkeypatch.setitem(CFG.extra, "agent_call_wall_clock_s", 0)
-    # typewriter_print мокаем чтобы не засорял вывод
+    # mock typewriter_print so it does not pollute output
     monkeypatch.setattr(pipeline, "typewriter_print", lambda r, p: "")
     bot = _FakeBot(n_turns=50)
     pipeline._run_agent(bot, [{"role": "user", "content": "x"}], "🧪")

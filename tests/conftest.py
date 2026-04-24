@@ -1,8 +1,8 @@
-"""Позволяет запускать тесты без установки пакета + глобальная изоляция research/.
+"""Allows running the tests without installing the package + global isolation of research/.
 
-Мотивация: run.log показал тестовые данные (ComVo, dialog agents), утекавшие
-в prod notes.md. Индивидуальные тесты монкипатчили RESEARCH_DIR, но не все.
-Здесь — глобальный autouse: каждому тесту своя tmp research-папка.
+Motivation: run.log showed test data (ComVo, dialog agents) leaking
+into prod notes.md. Individual tests monkey-patched RESEARCH_DIR, but not all of them.
+This is a global autouse: each test gets its own tmp research folder.
 """
 import logging
 import sys
@@ -13,19 +13,19 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
-# ── Изоляция логгера на уровне модуля ────────────────────────────────────
-# Критично: делается ДО первого импорта любого lra.* модуля (кроме этого файла).
-# lra.logger.get_logger() при первом вызове цепляет FileHandler на реальный
-# research/run.log и ставит _CONFIGURED=True — после этого перенастроить
-# нельзя. Если этого не сделать, test tool-calls (append_notes, github_search
-# с тестовыми payload'ами вроде "[2401.99999] hallucination") будут писаться
-# в prod run.log при каждом `pytest`, создавая иллюзию что "тесты запускаются
-# в каждом прогоне агента".
+# ── Module-level logger isolation ────────────────────────────────────
+# Critical: done BEFORE the first import of any lra.* module (except this file).
+# lra.logger.get_logger() on first call attaches a FileHandler to the real
+# research/run.log and sets _CONFIGURED=True — after that reconfiguring is
+# impossible. Without this, test tool-calls (append_notes, github_search
+# with test payloads like "[2401.99999] hallucination") would be written
+# into the prod run.log on every `pytest`, creating an illusion that "tests are run
+# on every agent run".
 #
-# Решение: заранее помечаем lra-logger как сконфигурированный с пустым
-# набором хендлеров. get_logger() увидит _CONFIGURED=True и не будет
-# цеплять FileHandler. Тестам логи не нужны — они проверяют return-values,
-# не stderr/log output.
+# Fix: mark lra-logger as configured up-front with an empty
+# handler set. get_logger() will see _CONFIGURED=True and will not
+# attach a FileHandler. Tests do not need logs — they check return values,
+# not stderr/log output.
 def _silence_lra_logger() -> None:
     from lra import logger as _logger_mod
     root = logging.getLogger("lra")
@@ -45,11 +45,11 @@ _silence_lra_logger()
 
 @pytest.fixture(autouse=True)
 def _isolate_research_dir(tmp_path, monkeypatch):
-    """Каждому тесту — свежая tmp research/ папка. Патчит ВСЕ модули, захватившие
-    пути через `from ... import RESEARCH_DIR` (setattr на config недостаточно —
-    другие модули уже держат свою копию).
+    """Each test gets a fresh tmp research/ folder. Patches ALL modules that captured
+    paths via `from ... import RESEARCH_DIR` (setattr on config alone is not enough —
+    other modules already hold their own copy).
 
-    Также сбрасывает loop-tracker между тестами (ин-мемори state).
+    Also resets the loop-tracker between tests (in-memory state).
     """
     from lra import config, kb, memory, metrics, pipeline, research_memory, tools, validator
     from lra import plan as plan_mod

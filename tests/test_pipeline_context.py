@@ -1,4 +1,4 @@
-"""Статусный контекст пайплайна: покрытие плана и rejected evidence summary."""
+"""Pipeline status context: plan coverage and rejected evidence summary."""
 
 import json
 
@@ -57,7 +57,7 @@ def test_build_status_context_includes_rejected_summary(tmp_path, monkeypatch):
 
 
 def test_build_status_context_empty_research_dir(tmp_path, monkeypatch):
-    """`/status`, вызванный до старта research-а, не должен падать."""
+    """`/status` invoked before research starts must not crash."""
     from lra import config, pipeline
     from lra import plan as plan_mod
 
@@ -74,17 +74,17 @@ def test_build_status_context_empty_research_dir(tmp_path, monkeypatch):
 
     assert "Research status:" in ctx
     assert "some query" in ctx
-    # пустой план + нет rejected.jsonl → не должно быть связанных блоков
+    # empty plan + no rejected.jsonl → no related blocks expected
     assert "plan_progress:" not in ctx
     assert "rejected_evidence:" not in ctx
 
 
 def test_status_command_exposed_in_agent_cli():
-    """`/status` REPL-команда должна быть зарегистрирована в agent.py и использовать _build_status_context."""
+    """`/status` REPL command must be registered in agent.py and use _build_status_context."""
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[1] / "agent.py"
     text = src.read_text(encoding="utf-8")
 
-    assert '_build_status_context' in text, "agent.py должен импортировать _build_status_context"
-    assert 'q.startswith("/status")' in text, "agent.py должен обрабатывать /status"
+    assert '_build_status_context' in text, "agent.py must import _build_status_context"
+    assert 'q.startswith("/status")' in text, "agent.py must handle /status"

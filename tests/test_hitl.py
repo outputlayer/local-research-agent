@@ -1,10 +1,10 @@
-"""Тесты human-in-the-loop (HITL) pause-point в _hitl_review.
+"""Tests for the human-in-the-loop (HITL) pause-point in _hitl_review.
 
-Проверяем:
-- HITL не активируется если CFG.hitl=False (default) — safe default для тестов/resume
-- HITL не активируется если stdin не TTY — даже при CFG.hitl=True (не ломает неинтерактив)
-- При approve (a/s/пустая строка) writer НЕ вызывается повторно
-- При revise (r <комментарий>) writer вызывается один раз с комментарием
+Checks:
+- HITL is not activated if CFG.hitl=False (default) — safe default for tests/resume
+- HITL is not activated if stdin is not a TTY — even when CFG.hitl=True (does not break non-interactive)
+- On approve (a/s/empty line) the writer is NOT invoked again
+- On revise (r <comment>) the writer is invoked once with the comment
 """
 import io
 
@@ -23,13 +23,13 @@ def patched_paths(tmp_path, monkeypatch):
         for name, path in paths.items():
             if hasattr(mod, name):
                 monkeypatch.setattr(mod, name, path)
-    # draft должен существовать чтобы _hitl_review прошёл guard
-    (tmp_path / "draft.md").write_text("# Отчёт\n\ntest draft content\n", encoding="utf-8")
+    # draft must exist for _hitl_review to pass the guard
+    (tmp_path / "draft.md").write_text("# Report\n\ntest draft content\n", encoding="utf-8")
     return tmp_path
 
 
 def _make_writer_stub(monkeypatch):
-    """Подменяет _run_agent так, чтобы писать в список calls и ничего не делать."""
+    """Patches _run_agent so it records into the calls list and does nothing."""
     from lra import pipeline
     calls: list[dict] = []
 
@@ -42,14 +42,14 @@ def _make_writer_stub(monkeypatch):
 
 
 def test_hitl_disabled_by_default_no_prompt(patched_paths, monkeypatch):
-    """CFG.hitl отсутствует → _hitl_review должен тихо выйти, input() НЕ вызвать."""
+    """CFG.hitl missing → _hitl_review must exit silently and NOT call input()."""
     from lra import pipeline
     from lra.config import CFG
     CFG.pop("hitl", None)  # default=False
     calls = _make_writer_stub(monkeypatch)
 
     def boom_input(*a, **kw):
-        raise AssertionError("input() не должен вызываться при CFG.hitl=False")
+        raise AssertionError("input() must not be called when CFG.hitl=False")
     monkeypatch.setattr("builtins.input", boom_input)
 
     pipeline._hitl_review("test", writer=None, writer_msgs=[], valid=2, invalid=[], suspicious=[])
@@ -57,7 +57,7 @@ def test_hitl_disabled_by_default_no_prompt(patched_paths, monkeypatch):
 
 
 def test_hitl_skipped_when_stdin_not_tty(patched_paths, monkeypatch):
-    """Даже с CFG.hitl=True, если stdin не TTY — выходим тихо."""
+    """Even with CFG.hitl=True, if stdin is not a TTY — exit silently."""
     from lra import pipeline
     from lra.config import CFG
     CFG["hitl"] = True
@@ -66,7 +66,7 @@ def test_hitl_skipped_when_stdin_not_tty(patched_paths, monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO(""))  # isatty()=False
 
     def boom_input(*a, **kw):
-        raise AssertionError("input() не должен вызываться при stdin не TTY")
+        raise AssertionError("input() must not be called when stdin is not a TTY")
     monkeypatch.setattr("builtins.input", boom_input)
 
     try:
@@ -77,7 +77,7 @@ def test_hitl_skipped_when_stdin_not_tty(patched_paths, monkeypatch):
 
 
 def test_hitl_approve_no_rewrite(patched_paths, monkeypatch):
-    """CFG.hitl=True + TTY + ответ 'a' → writer НЕ вызывается."""
+    """CFG.hitl=True + TTY + answer 'a' → writer is NOT invoked."""
     from lra import pipeline
     from lra.config import CFG
     CFG["hitl"] = True
@@ -102,7 +102,7 @@ def test_hitl_approve_no_rewrite(patched_paths, monkeypatch):
 
 
 def test_hitl_revise_triggers_one_writer_pass(patched_paths, monkeypatch):
-    """Ответ 'r' + комментарий → ровно один writer-pass с HITL-сообщением."""
+    """Answer 'r' + comment → exactly one writer-pass with a HITL message."""
     from lra import pipeline
     from lra.config import CFG
     CFG["hitl"] = True
@@ -113,13 +113,13 @@ def test_hitl_revise_triggers_one_writer_pass(patched_paths, monkeypatch):
             return True
     monkeypatch.setattr("sys.stdin", FakeTTY(""))
 
-    # Первый input: "r" — выбор revise. Второй: сам комментарий.
-    answers = iter(["r", "добавь секцию про benchmarks"])
+    # First input: "r" — choose revise. Second: the comment itself.
+    answers = iter(["r", "add a benchmarks section"])
     monkeypatch.setattr("builtins.input", lambda *a, **kw: next(answers))
 
     writer_msgs: list[dict] = []
     try:
-        pipeline._hitl_review("моя тема", writer=object(), writer_msgs=writer_msgs,
+        pipeline._hitl_review("my topic", writer=object(), writer_msgs=writer_msgs,
                               valid=2, invalid=[], suspicious=[])
     finally:
         CFG.pop("hitl", None)
@@ -130,7 +130,7 @@ def test_hitl_revise_triggers_one_writer_pass(patched_paths, monkeypatch):
 
 
 def test_hitl_revise_empty_comment_approves(patched_paths, monkeypatch):
-    """Ответ 'r' + пустой комментарий → writer НЕ вызывается (принимаем как есть)."""
+    """Answer 'r' + empty comment → writer is NOT invoked (accept as is)."""
     from lra import pipeline
     from lra.config import CFG
     CFG["hitl"] = True
@@ -153,7 +153,7 @@ def test_hitl_revise_empty_comment_approves(patched_paths, monkeypatch):
 
 
 def test_hitl_inline_revise_comment(patched_paths, monkeypatch):
-    """Формат 'r <комментарий>' на одной строке — без второго input()."""
+    """Format 'r <comment>' on one line — without the second input()."""
     from lra import pipeline
     from lra.config import CFG
     CFG["hitl"] = True
@@ -164,7 +164,7 @@ def test_hitl_inline_revise_comment(patched_paths, monkeypatch):
             return True
     monkeypatch.setattr("sys.stdin", FakeTTY(""))
 
-    answers = iter(["r убери секцию benchmarks"])
+    answers = iter(["r remove the benchmarks section"])
     monkeypatch.setattr("builtins.input", lambda *a, **kw: next(answers))
 
     writer_msgs: list[dict] = []
@@ -174,11 +174,11 @@ def test_hitl_inline_revise_comment(patched_paths, monkeypatch):
     finally:
         CFG.pop("hitl", None)
     assert len(calls) == 1
-    assert any("убери секцию benchmarks" in m.get("content", "") for m in writer_msgs)
+    assert any("remove the benchmarks section" in m.get("content", "") for m in writer_msgs)
 
 
 def test_hitl_keyboard_interrupt_safely_accepts(patched_paths, monkeypatch):
-    """KeyboardInterrupt на prompt'е → принимаем как есть, writer НЕ вызывается."""
+    """KeyboardInterrupt at the prompt → accept as is, writer is NOT invoked."""
     from lra import pipeline
     from lra.config import CFG
     CFG["hitl"] = True

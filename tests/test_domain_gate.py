@@ -1,11 +1,11 @@
-"""Domain gate в AppendNotes + hf_papers kb auto-save.
+"""Domain gate in AppendNotes + hf_papers kb auto-save.
 
-Реальные failure modes из логов:
-1. ComVo [2603.11589] (audio vocoder) — single 'intelligence' overlap, прошёл старый gate.
-2. Emotional-support [2508.12935] — single 'electronic' overlap, прошёл старый gate.
-3. Оба попадали в kb.jsonl через auto-save в hf_papers ДО того как AppendNotes мог их срезать.
+Real failure modes from logs:
+1. ComVo [2603.11589] (audio vocoder) — single 'intelligence' overlap, passed the old gate.
+2. Emotional-support [2508.12935] — single 'electronic' overlap, passed the old gate.
+3. Both landed in kb.jsonl via auto-save in hf_papers BEFORE AppendNotes could cut them.
 
-Tiered gate: требует ≥1 core hit (из HEADER plan.md) И ≥2 overlap всего.
+Tiered gate: requires ≥1 core hit (from HEADER of plan.md) AND ≥2 total overlap.
 """
 import pytest
 
@@ -41,11 +41,11 @@ def test_tiered_keywords_separate_header_from_seeds():
     from lra.utils import extract_topic_keywords_tiered
     header, seeds = extract_topic_keywords_tiered(_EW_PLAN)
     assert {"electronic", "warfare", "elint", "intelligence"}.issubset(header)
-    # Core vocabulary терминах теперь тоже в header (vocab-строка часть header'а).
+    # Core vocabulary terms are now in the header too (vocab-line is part of header).
     assert "jammers" in header or "receivers" in header
-    # Seeds disjoint от header, содержат domain specifics не из vocab
+    # Seeds are disjoint from the header, contain domain specifics not in vocab
     assert "fingerprinting" in seeds or "geolocation" in seeds
-    # Generic-шум отфильтрован в обоих уровнях
+    # Generic noise is filtered on both tiers
     for noise in ("modern", "approach", "contested", "environments", "canyons",
                   "between", "challenges", "advanced", "novel", "algorithms"):
         assert noise not in header, f"{noise} leaked into header"
@@ -62,7 +62,7 @@ def test_domain_gate_blocks_comvo_no_core_hit(_isolated):
                "adversarial training, Korea University, phase representation iSTFT"),
     ))
     result = tools.AppendNotes().call(
-        {"content": "[2603.11589] adversarial training для EW waveform generation"}
+        {"content": "[2603.11589] adversarial training for EW waveform generation"}
     )
     assert "REJECTED" in result and "no_core_hit" in result
     assert not (_isolated / "notes.md").exists()
@@ -74,11 +74,11 @@ def test_domain_gate_blocks_comvo_no_core_hit(_isolated):
 
 
 def test_domain_gate_blocks_single_generic_overlap(_isolated):
-    """emotional-support-conversations с одиночным hit по 'intelligence'.
+    """emotional-support-conversations with a single hit on 'intelligence'.
 
-    Старый gate (порог 2 по плоскому set) мог пропустить: intelligence + electronic
-    оба в plan.md. Tiered: core hit есть, но seeds hit нет → нужен дополнительный
-    seed-термин для прохода, или ≥2 core-hit.
+    The old gate (threshold 2 on a flat set) could let it through: intelligence + electronic
+    both in plan.md. Tiered: core hit exists but no seeds hit → needs an extra
+    seed term to pass, or ≥2 core-hit.
     """
     from lra import kb, tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
@@ -110,7 +110,7 @@ def test_domain_gate_bypassed_for_reflection_without_ids(_isolated):
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     result = tools.AppendNotes().call(
-        {"content": "## Lesson: hf_papers 'generic AI' даёт нерелевантные результаты"}
+        {"content": "## Lesson: hf_papers 'generic AI' gives irrelevant results"}
     )
     assert "REJECTED" not in result
 
@@ -137,7 +137,7 @@ def test_domain_gate_lenient_flag(_isolated, monkeypatch):
 
 
 def test_gate_paper_for_kb_blocks_comvo(_isolated):
-    """hf_papers kb auto-save gate: off-topic paper не должен осесть в kb.jsonl."""
+    """hf_papers kb auto-save gate: off-topic paper must not land in kb.jsonl."""
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     passed, reason, _o, _h = tools.gate_paper_for_kb(
@@ -147,7 +147,7 @@ def test_gate_paper_for_kb_blocks_comvo(_isolated):
         "with adversarial training and phase representation",
     )
     assert passed is False
-    assert reason.startswith("anti_keyword")  # vocoder в ANTI_KEYWORDS, reason=anti_keyword:vocoder(_isolated):
+    assert reason.startswith("anti_keyword")  # vocoder is in ANTI_KEYWORDS, reason=anti_keyword:vocoder(_isolated):
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     passed, reason, _o, _h = tools.gate_paper_for_kb(
@@ -169,14 +169,14 @@ def test_gate_paper_for_kb_bypass_without_plan(_isolated):
 _NARROW_PLAN = (
     "# Plan: electronic warfare and ELINT\n\n"
     "**Core vocabulary:** ELINT, ECM, jammers\n"
-)  # header = {electronic, warfare, elint, intelligence, jammers, ecm} ≈ 4-6 слов
+)  # header = {electronic, warfare, elint, intelligence, jammers, ecm} ≈ 4-6 words
 
 
 def test_gate_paper_for_kb_adaptive_threshold_narrow_header(_isolated):
-    """Узкий header (≤4 core-kws) → достаточно 1 hit, paper не режется «weak_overlap»."""
+    """Narrow header (≤4 core-kws) → 1 hit is enough, paper is not cut as "weak_overlap"."""
     from lra import tools
     (_isolated / "plan.md").write_text(_NARROW_PLAN, encoding="utf-8")
-    # cognitive radar jamming — 1 hit (нет прямого 'electronic'/'warfare', но title упомянёт)
+    # cognitive radar jamming — 1 hit (no direct 'electronic'/'warfare' but title mentions)
     passed, reason, o_h, h = tools.gate_paper_for_kb(
         "2501.11111",
         "Cognitive radar jamming detection via deep learning",
@@ -187,7 +187,7 @@ def test_gate_paper_for_kb_adaptive_threshold_narrow_header(_isolated):
 
 
 def test_gate_paper_for_kb_logs_rejection_to_jsonl(_isolated):
-    """Skip в gate_paper_for_kb должен писаться в rejected.jsonl с reason kb_autosave:*."""
+    """Skip in gate_paper_for_kb must be written to rejected.jsonl with reason kb_autosave:*."""
     import json
 
     from lra import tools
@@ -207,7 +207,7 @@ def test_gate_paper_for_kb_logs_rejection_to_jsonl(_isolated):
 
 
 def test_anti_keyword_blocks_jailbreak_paper(_isolated):
-    """LLM-safety/jailbreak paper не должен проходить domain gate."""
+    """An LLM-safety/jailbreak paper must not pass the domain gate."""
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     passed, reason, _o, _h = tools.gate_paper_for_kb(
@@ -220,7 +220,7 @@ def test_anti_keyword_blocks_jailbreak_paper(_isolated):
 
 
 def test_anti_keyword_does_not_block_relevant_ew_paper(_isolated):
-    """Релевантный EW paper без anti-keywords проходит."""
+    """A relevant EW paper without anti-keywords passes."""
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     passed, reason, _o, _h = tools.gate_paper_for_kb(
@@ -232,7 +232,7 @@ def test_anti_keyword_does_not_block_relevant_ew_paper(_isolated):
 
 
 def test_gate_repo_for_kb_blocks_comvo(_isolated):
-    """GitHub gate должен блокировать audio vocoder репо."""
+    """The GitHub gate must block an audio vocoder repo."""
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     passed, reason = tools.gate_repo_for_kb(
@@ -244,7 +244,7 @@ def test_gate_repo_for_kb_blocks_comvo(_isolated):
 
 
 def test_gate_repo_for_kb_passes_ew_repo(_isolated):
-    """EW-релевантное репо должно проходить."""
+    """An EW-relevant repo must pass."""
     from lra import tools
     (_isolated / "plan.md").write_text(_EW_PLAN, encoding="utf-8")
     passed, reason = tools.gate_repo_for_kb(
@@ -254,7 +254,7 @@ def test_gate_repo_for_kb_passes_ew_repo(_isolated):
     assert passed is True
 
 
-# ── Fail-closed when bootstrap planner fails (нет **Core vocabulary:** в plan.md) ──
+# ── Fail-closed when bootstrap planner fails (no **Core vocabulary:** in plan.md) ──
 _PLAN_NO_VOCAB = (
     "# Plan: electronic warfare and ELINT\n\n"
     "## [TODO]\n"
@@ -263,11 +263,11 @@ _PLAN_NO_VOCAB = (
 
 
 def test_gate_paper_fails_closed_without_vocabulary(_isolated):
-    """Bootstrap упал → нет Core vocabulary → даже релевантный paper НЕ проходит.
+    """Bootstrap failed → no Core vocabulary → even a relevant paper DOES NOT pass.
 
-    Раньше gate работал по 4 словам заголовка → пропускал мины (cognitive radar
-    в minesweeping context) под видом EW. Теперь fail-closed: пока пользователь
-    явно не разрешит CFG['allow_no_vocab']=True, всё блокируется.
+    Previously the gate worked on 4 header words → let mines through (cognitive radar
+    in minesweeping context) as if EW. Now fail-closed: until the user
+    explicitly allows CFG['allow_no_vocab']=True, everything is blocked.
     """
     from lra import tools
     (_isolated / "plan.md").write_text(_PLAN_NO_VOCAB, encoding="utf-8")
@@ -301,7 +301,7 @@ def test_append_notes_fails_closed_without_vocabulary(_isolated):
 
 
 def test_allow_no_vocab_escape_hatch(_isolated, monkeypatch):
-    """CFG['allow_no_vocab']=True позволяет работать без vocabulary (на свой страх)."""
+    """CFG['allow_no_vocab']=True allows operation without vocabulary (at your own risk)."""
     from lra import config, tools
     (_isolated / "plan.md").write_text(_PLAN_NO_VOCAB, encoding="utf-8")
     monkeypatch.setitem(config.CFG.extra, "allow_no_vocab", True)

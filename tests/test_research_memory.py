@@ -1,4 +1,4 @@
-"""Тесты typed research memory: сохранение, поиск релевантного контекста, run-summary."""
+"""Tests for typed research memory: save, relevant-context lookup, run-summary."""
 
 from lra import research_memory
 

@@ -1,4 +1,4 @@
-"""Тесты валидатора цитат — полностью без hf CLI (run_hf_info=False)."""
+"""Tests for the citation validator — fully without hf CLI (run_hf_info=False)."""
 from lra.validator import validate_draft_ids
 
 
@@ -7,8 +7,8 @@ def test_no_ids_returns_zeros():
 
 
 def test_id_missing_from_notes_marked_invalid():
-    draft = "Согласно [2301.12345], это работает."
-    notes = "# Notes\n(нет id)"
+    draft = "According to [2301.12345], it works."
+    notes = "# Notes\n(no id)"
     valid, invalid, suspicious = validate_draft_ids(draft, notes, run_hf_info=False)
     assert invalid == ["2301.12345"]
     assert valid == 0
@@ -32,15 +32,15 @@ def test_id_with_good_citation_passes():
 
 
 def test_suspicious_when_citation_context_mismatches_notes():
-    # id есть в notes, но в draft'е контекст вокруг него совсем про другое
+    # id is in notes, but the context around it in the draft is about something else
     notes = (
         "[2301.12345] Chinchilla scaling laws compute tokens parameters Hoffmann\n"
     )
     draft = (
-        "Квантовая гравитация струнная теория калибровочные суперсимметрия [2301.12345]"
+        "Quantum gravity string theory gauge supersymmetry [2301.12345]"
     )
     valid, invalid, suspicious = validate_draft_ids(draft, notes, run_hf_info=False)
-    assert valid == 1  # id формально существует в notes
+    assert valid == 1  # id is formally present in notes
     assert invalid == []
     assert len(suspicious) == 1
     assert "2301.12345" in suspicious[0]
@@ -48,11 +48,11 @@ def test_suspicious_when_citation_context_mismatches_notes():
 
 
 def test_citation_laundering_caught_at_threshold_5():
-    # Реальный сценарий из live run'а: writer берёт arxiv-id из notes,
-    # но переатрибутирует claim под тему запроса. Жаргон частично
-    # пересекается (complex-valued/adversarial/neural), но тема разная:
+    # Real scenario from a live run: the writer takes an arxiv-id from notes
+    # but re-attributes the claim to the query topic. The jargon partially
+    # overlaps (complex-valued/adversarial/neural), but the topic differs:
     # notes → audio vocoder, draft → EW countermeasures.
-    # Threshold 3 такое пропускал, 5 ловит.
+    # Threshold 3 let this through; 5 catches it.
     notes = (
         "[2603.11589] ComVo audio vocoder complex-valued adversarial training "
         "waveform generation Korea University phase representation iSTFT"
@@ -63,7 +63,7 @@ def test_citation_laundering_caught_at_threshold_5():
     )
     valid, invalid, suspicious = validate_draft_ids(draft, notes, run_hf_info=False)
     assert valid == 1
-    assert len(suspicious) == 1, f"citation laundering должен ловиться, overlap={suspicious}"
+    assert len(suspicious) == 1, f"citation laundering must be caught, overlap={suspicious}"
 
 
 def test_multiple_ids_mixed():

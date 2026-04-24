@@ -1,10 +1,10 @@
-"""Тесты программной ротации фокуса через plan.json —
-страховка от зацикливания replanner'а."""
+"""Tests for programmatic focus rotation via plan.json —
+safety net against replanner looping."""
 from __future__ import annotations
 
 
 def _setup(tmp_path, monkeypatch):
-    """Патчит все модули, которые биндят PLAN_*/RESEARCH_DIR на import-time."""
+    """Patches all modules that bind PLAN_*/RESEARCH_DIR at import time."""
     from lra import config, memory, pipeline, plan
     monkeypatch.setattr(config, "PLAN_PATH", tmp_path / "plan.md")
     monkeypatch.setattr(config, "RESEARCH_DIR", tmp_path)
@@ -18,17 +18,17 @@ def _setup(tmp_path, monkeypatch):
 
 def test_rotate_focus_uses_next_open_task(tmp_path, monkeypatch):
     pipeline, plan = _setup(tmp_path, monkeypatch)
-    p = plan.reset("тема исследования")
+    p = plan.reset("research topic")
     original_focus_id = p.current_focus_id
     assert original_focus_id is not None
 
-    assert pipeline._rotate_focus_fallback("тема") is True
+    assert pipeline._rotate_focus_fallback("topic") is True
     reloaded = plan.load()
     assert reloaded is not None
-    # старый фокус должен быть заблокирован (replanner провалился)
+    # the old focus must be blocked (replanner failed)
     old = reloaded.get(original_focus_id)
     assert old is not None and old.status == "blocked"
-    # новый фокус — первая оставшаяся open задача
+    # new focus — the first remaining open task
     assert reloaded.current_focus_id is not None
     assert reloaded.current_focus_id != original_focus_id
     new_focus = reloaded.get(reloaded.current_focus_id)
@@ -37,15 +37,15 @@ def test_rotate_focus_uses_next_open_task(tmp_path, monkeypatch):
 
 def test_rotate_focus_returns_false_when_no_open(tmp_path, monkeypatch):
     pipeline, plan = _setup(tmp_path, monkeypatch)
-    p = plan.reset("тема")
+    p = plan.reset("topic")
     for t in list(p.tasks):
         if t.status in ("open", "in_progress"):
             p.close_task(t.id, why="test cleanup")
     plan.save(p)
-    assert pipeline._rotate_focus_fallback("тема") is False
+    assert pipeline._rotate_focus_fallback("topic") is False
 
 
 def test_rotate_focus_no_plan_returns_false(tmp_path, monkeypatch):
     pipeline, _ = _setup(tmp_path, monkeypatch)
-    # plan.json не существует
+    # plan.json does not exist
     assert pipeline._rotate_focus_fallback("x") is False

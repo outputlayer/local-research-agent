@@ -1,9 +1,9 @@
-"""Smoke-тест: импорты не ломаются, tools регистрируются, MLX-модель НЕ грузится."""
+"""Smoke test: imports do not break, tools are registered, the MLX model is NOT loaded."""
 
 
 def test_config_loads():
     from lra.config import CFG, RESEARCH_DIR
-    assert CFG["model"]  # dict-style доступ
+    assert CFG["model"]  # dict-style access
     assert CFG.model  # dataclass-style
     assert RESEARCH_DIR.name == "research"
 
@@ -23,11 +23,11 @@ def test_tools_registered():
     for t in ("hf_papers", "arxiv_search", "write_draft", "append_draft",
               "read_notes", "write_plan", "read_querylog", "append_lessons",
               "github_search"):
-        assert t in TOOL_REGISTRY, f"tool {t} не зарегистрирован"
+        assert t in TOOL_REGISTRY, f"tool {t} is not registered"
 
 
 def test_llm_module_does_not_eagerly_load():
-    # Импорт не должен тянуть mlx_lm.load (это делается только в get_mlx)
+    # Import must not pull in mlx_lm.load (that happens only in get_mlx)
     from lra import llm
     assert llm._MLX_CACHE == {} or isinstance(llm._MLX_CACHE, dict)
 

@@ -15,7 +15,7 @@ def test_parse_strict_json():
     assert tt == "theoretical"
     assert len(tasks) == 1
     assert tasks[0]["title"].startswith("Sobolev")
-    assert vocab == []  # vocab отсутствует в JSON → пустой список
+    assert vocab == []  # vocab missing in JSON → empty list
 
 
 def test_parse_with_core_vocabulary():
@@ -53,9 +53,9 @@ def test_parse_wrapped_in_markdown_fence():
 
 
 def test_parse_with_llm_preamble():
-    """LLM часто кладёт 'Вот JSON:' вокруг — парсер должен найти {...}."""
+    """The LLM often wraps output with 'Here is JSON:' — the parser must locate {...}."""
     from lra.plan import parse_bootstrap_json
-    raw = 'Вот план:\n\n{"topic_type":"mixed","tasks":[{"title":"x x x x x x x x x x","why":"y"}]}\n\nГотово.'
+    raw = 'Here is the plan:\n\n{"topic_type":"mixed","tasks":[{"title":"x x x x x x x x x x","why":"y"}]}\n\nDone.'
     out = parse_bootstrap_json(raw)
     assert out is not None
     assert out[0] == "mixed"
@@ -118,7 +118,7 @@ def test_bootstrap_rejects_too_many_seeds(_isolated_plan):
 
 
 def test_bootstrap_filters_bad_entries(_isolated_plan):
-    """Короткие/пустые titles отбрасываются; если валидных <3 — возвращаем None."""
+    """Short/empty titles dropped; if valid <3 — return None."""
     from lra.plan import bootstrap_from_seeds
     seeds = [
         {"title": "valid title one long enough", "why": "a"},
@@ -142,7 +142,7 @@ def test_bootstrap_normalizes_unknown_topic_type(_isolated_plan):
 
 
 def test_bootstrap_sanitizes_core_vocabulary(_isolated_plan):
-    """len 4-40, dedupe case-insensitive, cap 15, non-strings отбрасываются."""
+    """len 4-40, dedupe case-insensitive, cap 15, non-strings dropped."""
     from lra.plan import bootstrap_from_seeds, load
     seeds = [
         {"title": "task one with enough chars", "why": "w"},
@@ -155,7 +155,7 @@ def test_bootstrap_sanitizes_core_vocabulary(_isolated_plan):
         "a" * 50,         # too long
         "ELINT",          # ok
         "elint",          # dup (case-insensitive)
-        "   ESM   ",      # ok (strip, 3 chars — порог 3)
+        "   ESM   ",      # ok (strip, 3 chars — threshold 3)
         123,              # not a string
         "",               # empty
     ] + [f"term{i}abcd" for i in range(20)]  # 20 → cap at 15
@@ -165,7 +165,7 @@ def test_bootstrap_sanitizes_core_vocabulary(_isolated_plan):
     assert loaded.core_vocabulary[0] == "jamming"
     assert "ELINT" in loaded.core_vocabulary
     assert "ESM" in loaded.core_vocabulary
-    # никаких duplicates
+    # no duplicates
     lowers = [t.lower() for t in loaded.core_vocabulary]
     assert len(lowers) == len(set(lowers))
     # cap 15
@@ -185,7 +185,7 @@ def test_render_md_emits_core_vocabulary_line(_isolated_plan, tmp_path):
     )
     md = (tmp_path / "plan.md").read_text()
     assert "**Core vocabulary:** jamming, ELINT, ESM" in md
-    # строка идёт ПОСЛЕ заголовка, ДО focus-line
+    # line goes AFTER the header, BEFORE focus-line
     header_pos = md.index("# Plan:")
     vocab_pos = md.index("**Core vocabulary:**")
     focus_pos = md.index("[FOCUS]")
@@ -205,7 +205,7 @@ def test_render_md_no_vocab_line_when_empty(_isolated_plan, tmp_path):
 
 
 def test_plan_sections_merges_core_vocabulary_into_header():
-    """utils._plan_sections должен тянуть vocab-line в HEADER, чтобы gate видел."""
+    """utils._plan_sections must pull the vocab-line into HEADER so the gate sees it."""
     from lra.utils import extract_topic_keywords_tiered
     plan_md = (
         "# Plan: generic topic title\n"
@@ -218,7 +218,7 @@ def test_plan_sections_merges_core_vocabulary_into_header():
         "- [T1] task one\n"
     )
     header_kws, _ = extract_topic_keywords_tiered(plan_md)
-    # vocab-термины попали в header (а значит в header_kws)
+    # vocab terms made it into header (and thus header_kws)
     assert "jamming" in header_kws
     assert "elint" in header_kws
     assert "deinterleaving" in header_kws
@@ -248,7 +248,7 @@ def _fake_run_agent(response_content):
 def test_pipeline_bootstrap_applies_valid_json(_isolated_all, monkeypatch):
     from lra import pipeline
     from lra import plan as plan_mod
-    # reset static plan first (как делает reset_research)
+    # reset static plan first (as reset_research does)
     plan_mod.reset("old static")
 
     payload = json.dumps({
@@ -271,11 +271,11 @@ def test_pipeline_bootstrap_applies_valid_json(_isolated_all, monkeypatch):
 
 
 def test_pipeline_bootstrap_falls_back_on_garbage(_isolated_all, monkeypatch):
-    """LLM возвращает мусор → retry тоже мусор → static-vocab fallback из query.
+    """LLM returns junk → retry also junk → static-vocab fallback from query.
 
-    После добавления retry+static fallback (P2) функция возвращает True если
-    из query удалось извлечь хоть один доменный термин (≥4 симв). Plan остаётся
-    статическим, но core_vocabulary заполняется ключевыми словами из самого query.
+    After adding retry+static fallback (P2) the function returns True if
+    at least one domain term (≥4 chars) was extracted from the query. Plan stays
+    static, but core_vocabulary is filled with keywords from the query itself.
     """
     from lra import pipeline
     from lra import plan as plan_mod
@@ -286,17 +286,17 @@ def test_pipeline_bootstrap_falls_back_on_garbage(_isolated_all, monkeypatch):
     monkeypatch.setattr(pipeline, "build_bot", lambda *a, **kw: object())
 
     ok = pipeline._bootstrap_initial_plan("retrieval augmented generation pipelines")
-    assert ok is True  # static-vocab fallback применился
+    assert ok is True  # static-vocab fallback applied
     loaded = plan_mod.load()
-    # Статические задачи не тронуты
+    # Static tasks untouched
     assert {t.title for t in loaded.tasks} == static_titles
-    # Но vocabulary теперь заполнен из query
+    # But vocabulary is now filled from the query
     assert len(loaded.core_vocabulary) >= 2
     assert "retrieval" in loaded.core_vocabulary or "generation" in loaded.core_vocabulary
 
 
 def test_pipeline_bootstrap_survives_llm_exception(_isolated_all, monkeypatch):
-    """LLM падает с исключением → retry тоже падает → static-vocab fallback срабатывает."""
+    """LLM raises exception → retry also raises → static-vocab fallback triggers."""
     from lra import pipeline
     from lra import plan as plan_mod
     plan_mod.reset("electronic warfare jamming detection")
@@ -313,7 +313,7 @@ def test_pipeline_bootstrap_survives_llm_exception(_isolated_all, monkeypatch):
 
 
 def test_pipeline_bootstrap_no_fallback_for_empty_query(_isolated_all, monkeypatch):
-    """Если query слишком короткий чтобы извлечь vocab (1-3 символа), fallback пуст → False."""
+    """If the query is too short to extract vocab (1-3 chars), fallback is empty → False."""
     from lra import pipeline
     from lra import plan as plan_mod
     plan_mod.reset("xx")
@@ -323,10 +323,10 @@ def test_pipeline_bootstrap_no_fallback_for_empty_query(_isolated_all, monkeypat
 
     ok = pipeline._bootstrap_initial_plan("xx")
     assert ok is False
-    assert plan_mod.load() is not None  # статический план уцелел
+    assert plan_mod.load() is not None  # static plan survived
 
 
 def test_cfg_flag_default_on():
-    """CFG['dynamic_initial_plan'] по дефолту считается True (guard in research_loop)."""
+    """CFG['dynamic_initial_plan'] defaults to True (guard in research_loop)."""
     from lra.config import CFG
     assert CFG.get("dynamic_initial_plan", True) is True

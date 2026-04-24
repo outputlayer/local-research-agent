@@ -1,4 +1,4 @@
-"""Юниты для github_search tool — cli.run замокан, реальный CLI не вызывается."""
+"""Unit tests for the github_search tool — cli.run is mocked; the real CLI is not called."""
 import json
 
 import pytest
@@ -91,9 +91,9 @@ def test_auth_error_suggests_login(gh_tool, monkeypatch):
 
 def test_missing_cli_message(gh_tool, monkeypatch):
     tool, tools_mod, _ = gh_tool
-    monkeypatch.setattr(tools_mod.cli_run, "run", _err("команда не найдена: gh", rc=127))
+    monkeypatch.setattr(tools_mod.cli_run, "run", _err("command not found: gh", rc=127))
     out = tool.call({"query": "x"})
-    assert "brew install gh" in out or "не найден" in out
+    assert "brew install gh" in out or "not found" in out
 
 
 def test_dedup_via_querylog(gh_tool, monkeypatch):
@@ -106,7 +106,7 @@ def test_dedup_via_querylog(gh_tool, monkeypatch):
 
 
 def test_inline_stars_qualifier_is_extracted_to_flag(gh_tool, monkeypatch):
-    """Модель часто лепит 'stars:>=10' в query — должно вырезаться и уходить в --stars."""
+    """The model often puts 'stars:>=10' into query — it must be stripped and moved to --stars."""
     tool, tools_mod, _ = gh_tool
     captured = {}
 
@@ -117,10 +117,10 @@ def test_inline_stars_qualifier_is_extracted_to_flag(gh_tool, monkeypatch):
     monkeypatch.setattr(tools_mod.cli_run, "run", _spy)
     tool.call({"query": "multi-agent orchestration stars:>=10", "type": "repos"})
     cmd = captured["cmd"]
-    # qualifier удалён из позиционного аргумента query
+    # qualifier removed from the positional query arg
     assert "stars:>=10" not in cmd[3]
     assert cmd[3] == "multi-agent orchestration"
-    # и добавлен как флаг
+    # and added as a flag
     assert "--stars" in cmd
     assert ">=10" in cmd[cmd.index("--stars") + 1]
 
@@ -153,18 +153,18 @@ def test_explicit_min_stars_param_takes_precedence(gh_tool, monkeypatch):
     monkeypatch.setattr(tools_mod.cli_run, "run", _spy)
     tool.call({"query": "x stars:>=5", "type": "repos", "min_stars": 100})
     cmd = captured["cmd"]
-    # explicit param побеждает inline qualifier
+    # explicit param beats inline qualifier
     assert ">=100" in cmd[cmd.index("--stars") + 1]
 
 
 def test_empty_query_after_stripping_qualifiers_returns_error(gh_tool, monkeypatch):
     tool, _, _ = gh_tool
     out = tool.call({"query": "stars:>=10 language:python", "type": "repos"})
-    assert "пустой" in out.lower() or "error" in out.lower()
+    assert "empty" in out.lower() or "error" in out.lower()
 
 
 def test_long_query_rejected_before_network(gh_tool, monkeypatch):
-    """Длинные (>MAX_GITHUB_QUERY_WORDS) запросы реджектятся до похода в gh CLI."""
+    """Long (>MAX_GITHUB_QUERY_WORDS) queries are rejected before calling gh CLI."""
     tool, tools_mod, _ = gh_tool
     called = {"n": 0}
 
@@ -177,15 +177,15 @@ def test_long_query_rejected_before_network(gh_tool, monkeypatch):
         "query": "LangGraph multi-agent orchestration state machine workflow",
         "type": "repos",
     })
-    assert called["n"] == 0, "длинный query не должен вызывать gh CLI"
+    assert called["n"] == 0, "a long query must not invoke gh CLI"
     assert "reject" in out.lower()
     assert "too long" in out.lower()
-    # Должна быть конкретная подсказка — сокращённый вариант
+    # Must include a concrete hint — a shortened variant
     assert "langgraph" in out.lower()
 
 
 def test_short_query_zero_results_still_works(gh_tool, monkeypatch):
-    """После reject длинных — короткий query с нулём результатов всё ещё даёт hint."""
+    """After rejecting long ones — a short query with zero results still gives a hint."""
     tool, tools_mod, _ = gh_tool
     monkeypatch.setattr(tools_mod.cli_run, "run", _ok("[]"))
     out = tool.call({"query": "langgraph orchestration", "type": "repos"})

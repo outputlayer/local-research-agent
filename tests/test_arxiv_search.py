@@ -1,4 +1,4 @@
-"""Fallback-поиск по arXiv API: парсинг feed, freshness, autosave в KB."""
+"""Fallback search over the arXiv API: feed parsing, freshness, autosave into KB."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -71,7 +71,7 @@ def test_arxiv_search_fallback_when_all_old(tmp_path, monkeypatch):
     out = tool.call({"query": "legacy niche radar", "limit": 5})
 
     assert "2201.00001" in out
-    assert "старше" in out.lower() or "fallback" in out.lower()
+    assert "older" in out.lower() or "fallback" in out.lower() or "stale" in out.lower()
 
 
 def test_arxiv_search_domain_gate_skips_offtopic_autosave(tmp_path, monkeypatch):
@@ -96,7 +96,7 @@ def test_arxiv_search_domain_gate_skips_offtopic_autosave(tmp_path, monkeypatch)
 
 
 def test_arxiv_search_categories_in_query(tmp_path, monkeypatch):
-    """categories=['eess.SP','cs.IT'] → search_query содержит cat:eess.SP OR cat:cs.IT."""
+    """categories=['eess.SP','cs.IT'] → search_query contains cat:eess.SP OR cat:cs.IT."""
     tools = _patch(tmp_path, monkeypatch)
     tool = tools.ArxivSearch()
     fresh = (datetime.now(UTC) - timedelta(days=30)).date().isoformat()
@@ -116,7 +116,7 @@ def test_arxiv_search_categories_in_query(tmp_path, monkeypatch):
 
     assert "2502.99999" in out
     url = captured["url"]
-    # URL-encoded: пробелы как +, AND/OR/cat: внутри
+    # URL-encoded: spaces as +, AND/OR/cat: inside
     assert "cat%3Aeess.SP" in url
     assert "cat%3Acs.IT" in url
     assert "+OR+" in url
@@ -124,7 +124,7 @@ def test_arxiv_search_categories_in_query(tmp_path, monkeypatch):
 
 
 def test_arxiv_search_categories_sanitized(tmp_path, monkeypatch):
-    """Невалидные категории отбрасываются (защита от инъекции в query string)."""
+    """Invalid categories are dropped (protection against query-string injection)."""
     tools = _patch(tmp_path, monkeypatch)
     tool = tools.ArxivSearch()
     fresh = (datetime.now(UTC) - timedelta(days=30)).date().isoformat()
@@ -138,12 +138,12 @@ def test_arxiv_search_categories_sanitized(tmp_path, monkeypatch):
         return xml
     monkeypatch.setattr(tools._helpers, "_fetch_text", _fake)
 
-    # Mixed: один валидный, два мусорных (с пробелом, с кавычкой)
+    # Mixed: one valid, two junk
     tool.call({"query": "test query A", "limit": 2,
                "categories": ["eess.SP", "drop table users", "x' OR '1"]})
 
     url = captured["url"]
     assert "cat%3Aeess.SP" in url
-    # Мусор не просочился
+    # no junk leaked
     assert "drop" not in url.lower()
     assert "1%27" not in url

@@ -1,11 +1,11 @@
-"""Тесты для prefetch_iteration — параллельный прогрев disk-cache."""
+"""Tests for prefetch_iteration — parallel warmup of the disk cache."""
 import time
 
 from lra.cli import CliResult
 
 
 def test_prefetch_runs_hf_and_gh_in_parallel(monkeypatch):
-    """prefetch должен вызвать hf+gh параллельно: 2 последовательных 0.1с запроса ≈ 0.1с, не 0.2с."""
+    """prefetch must call hf+gh in parallel: 2 sequential 0.1s requests ≈ 0.1s, not 0.2s."""
     from lra import pipeline
 
     def slow_hf_or_gh(cmd, **kw):
@@ -20,22 +20,22 @@ def test_prefetch_runs_hf_and_gh_in_parallel(monkeypatch):
 
     assert pf["hf"] is True
     assert pf["gh"] is True
-    # 2 параллельных 0.1с должны занять ~0.1с + накладные, но существенно меньше 0.2с
+    # 2 parallel 0.1s must take ~0.1s + overhead, but substantially less than 0.2s
     assert elapsed < 0.18, f"expected parallel execution (<0.18s), got {elapsed:.3f}s"
 
 
 def test_prefetch_reports_cache_hits(monkeypatch, tmp_path):
-    """Повторный prefetch с одним и тем же FOCUS → оба hf_cached+gh_cached=True."""
+    """Repeat prefetch with the same FOCUS → both hf_cached+gh_cached=True."""
     from lra import cache, pipeline
     monkeypatch.setattr(cache, "CACHE_DIR", tmp_path)
 
     call_count = {"n": 0}
     def fake_run(cmd, **kw):
-        # Настоящий cli.run с патченным CACHE_DIR
+        # Real cli.run with patched CACHE_DIR
         call_count["n"] += 1
         return CliResult('[]', '', 0)
 
-    # Используем НАСТОЯЩИЙ cli.run, но с замоканным subprocess
+    # Use the REAL cli.run but with mocked subprocess
     import subprocess
     class FakeProc:
         stdout = '[]'
@@ -53,7 +53,7 @@ def test_prefetch_reports_cache_hits(monkeypatch, tmp_path):
 
 
 def test_prefetch_swallows_errors(monkeypatch):
-    """Если hf или gh падает — prefetch не кидает, просто возвращает ok=False."""
+    """If hf or gh fails — prefetch does not raise, just returns ok=False."""
     from lra import pipeline
 
     def failing(cmd, **kw):

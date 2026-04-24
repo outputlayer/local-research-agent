@@ -1,4 +1,4 @@
-"""Freshness-фильтры (github/hf_papers) + render_md с прогресс-строкой."""
+"""Freshness filters (github/hf_papers) + render_md with progress line."""
 import json
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -35,13 +35,13 @@ def hf_tool(tmp_path, monkeypatch):
     return tools_mod.HfPapers(), tools_mod, tmp_path
 
 
-# ── github_search: --updated фильтр и fallback ──────────────────────────────
+# ── github_search: --updated filter and fallback ──────────────────────────────
 
 def test_github_uses_updated_flag_for_repos(gh_tool, monkeypatch):
     tool, tools_mod, _ = gh_tool
     all_argvs: list[list[str]] = []
 
-    # Возвращаем непустой результат на первом же вызове, чтобы fallback не сработал
+    # Return a non-empty result on the first call so the fallback does not fire
     def _capture(argv, timeout=None):
         all_argvs.append(list(argv))
         payload = json.dumps([{
@@ -65,7 +65,7 @@ def test_github_uses_updated_flag_for_repos(gh_tool, monkeypatch):
 
 
 def test_github_falls_back_without_updated_if_first_empty(gh_tool, monkeypatch):
-    """Если с --updated ноль результатов → второй запрос без фильтра + stale-note."""
+    """If --updated returns zero results → second request without filter + stale-note."""
     tool, tools_mod, _ = gh_tool
     calls = []
 
@@ -78,7 +78,7 @@ def test_github_falls_back_without_updated_if_first_empty(gh_tool, monkeypatch):
 
     def _run(argv, timeout=None):
         calls.append(list(argv))
-        # первый — с --updated, пустой; второй — без, с результатом
+        # first — with --updated, empty; second — without, with a result
         if "--updated" in argv:
             return CliResult(fresh_result, "", 0)
         return CliResult(stale_result, "", 0)
@@ -89,11 +89,11 @@ def test_github_falls_back_without_updated_if_first_empty(gh_tool, monkeypatch):
     assert "--updated" in calls[0]
     assert "--updated" not in calls[1]
     assert "old/repo" in out
-    assert "fallback" in out.lower() or "старые" in out.lower() or "старые" in out.lower()
+    assert "fallback" in out.lower() or "stale" in out.lower() or "older" in out.lower()
 
 
 def test_github_code_search_no_freshness_filter(gh_tool, monkeypatch):
-    """type=code не поддерживает --updated у gh, не должны его добавлять."""
+    """type=code does not support --updated in gh; we must not add it."""
     tool, tools_mod, _ = gh_tool
     captured = {}
 
@@ -106,7 +106,7 @@ def test_github_code_search_no_freshness_filter(gh_tool, monkeypatch):
     assert "--updated" not in captured["argv"]
 
 
-# ── hf_papers: фильтр по published_at ───────────────────────────────────────
+# ── hf_papers: filter by published_at ───────────────────────────────────────
 
 def test_hf_papers_filters_old(hf_tool, monkeypatch):
     tool, tools_mod, _ = hf_tool
@@ -122,12 +122,12 @@ def test_hf_papers_filters_old(hf_tool, monkeypatch):
                         lambda argv, **kw: CliResult(payload, "", 0))
     out = tool.call({"query": "something", "limit": 5})
     assert "2025.00001" in out
-    # Старая не должна проходить (>2 лет)
+    # the old one must not pass (>2 years)
     assert "2020.00001" not in out
 
 
 def test_hf_papers_fallback_when_all_old(hf_tool, monkeypatch):
-    """Если все статьи старше порога — всё равно показываем (лучше что-то чем ничего) с пометкой."""
+    """If all papers are older than the threshold — still show them (something > nothing) with a note."""
     tool, tools_mod, _ = hf_tool
     old = (datetime.now(UTC) - timedelta(days=1500)).date().isoformat()
     payload = json.dumps([
@@ -138,11 +138,11 @@ def test_hf_papers_fallback_when_all_old(hf_tool, monkeypatch):
                         lambda argv, **kw: CliResult(payload, "", 0))
     out = tool.call({"query": "niche", "limit": 5})
     assert "2020.00001" in out
-    # должна быть явная пометка что fallback
-    assert "старше" in out.lower() or "fallback" in out.lower()
+    # must include an explicit fallback note
+    assert "older" in out.lower() or "fallback" in out.lower()
 
 
-# ── render_md: прогресс-строка ──────────────────────────────────────────────
+# ── render_md: progress line ──────────────────────────────────────────────
 
 def test_render_md_shows_progress_counts(tmp_path, monkeypatch):
     from lra import plan as plan_mod
@@ -151,7 +151,7 @@ def test_render_md_shows_progress_counts(tmp_path, monkeypatch):
     monkeypatch.setattr(plan_mod, "PLAN_PATH", md)
 
     plan = plan_mod.reset("test topic")  # 5 open tasks by default
-    # Закрываем две задачи, блокируем одну
+    # Close two tasks, block one
     plan.close_task("T1", why="test")
     plan.close_task("T2", why="test")
     plan.block_task("T3", iter_=0, why="test")

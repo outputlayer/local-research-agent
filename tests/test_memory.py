@@ -1,4 +1,4 @@
-"""Тесты памяти: seen_queries, archive, reset. Используют monkeypatch путей."""
+"""Memory tests: seen_queries, archive, reset. Use path monkeypatch."""
 import importlib
 
 import pytest
@@ -6,7 +6,7 @@ import pytest
 
 @pytest.fixture
 def mem(tmp_path, monkeypatch):
-    """Перенаправляет все пути в tmp_path и перезагружает модуль memory."""
+    """Redirects all paths to tmp_path and reloads the memory module."""
     from lra import config, memory, plan, research_memory
     monkeypatch.setattr(config, "RESEARCH_DIR", tmp_path)
     monkeypatch.setattr(config, "ARCHIVE_DIR", tmp_path / "archive")
@@ -17,12 +17,12 @@ def mem(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LESSONS_PATH", tmp_path / "lessons.md")
     monkeypatch.setattr(config, "QUERYLOG_PATH", tmp_path / "querylog.md")
     monkeypatch.setattr(config, "RESEARCH_MEMORY_DIR", tmp_path / "memory")
-    # plan.py биндит PLAN_PATH/PLAN_JSON_PATH/RESEARCH_DIR на import-time — патчим явно
+    # plan.py binds PLAN_PATH/PLAN_JSON_PATH/RESEARCH_DIR at import time — patch explicitly
     monkeypatch.setattr(plan, "PLAN_PATH", tmp_path / "plan.md")
     monkeypatch.setattr(plan, "PLAN_JSON_PATH", tmp_path / "plan.json")
     monkeypatch.setattr(plan, "RESEARCH_DIR", tmp_path)
     monkeypatch.setattr(research_memory, "RESEARCH_MEMORY_DIR", tmp_path / "memory")
-    # memory импортировал пути ПО ЗНАЧЕНИЮ на момент загрузки — перезагружаем
+    # memory imported paths BY VALUE at load time — reload
     importlib.reload(memory)
     return memory, tmp_path
 
@@ -70,16 +70,16 @@ def test_archive_previous_copies_files(mem):
     assert dest is not None
     assert (dest / "draft.md").read_text() == "# draft"
     assert (dest / "notes.md").read_text() == "# notes"
-    # Slug безопасный
+    # Safe slug
     assert "MyTopic" in dest.name or "mytopic" in dest.name.lower()
 
 
 def test_reset_research_preserves_lessons_and_querylog(mem):
     memory, tmp = mem
-    # Первый прогон
+    # First run
     memory.reset_research("topic A")
     memory.log_query("query one")
-    # Второй прогон — lessons и querylog должны остаться + получить маркер сессии
+    # Second run — lessons and querylog must remain + receive a session marker
     memory.reset_research("topic B")
     ql = (tmp / "querylog.md").read_text()
     assert "query one" in ql
