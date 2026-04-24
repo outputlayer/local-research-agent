@@ -31,8 +31,8 @@ jobs:
           python -m pip install --upgrade pip
           # mlx-lm is sometimes missing fresh wheels — do not fail CI if it can't be installed
           pip install -r requirements.txt || pip install qwen-agent==0.0.34 json5==0.14.0 pytest==9.0.3
-          # qwen-agent transitively imports soundfile at module load time
-          pip install soundfile
+          # qwen-agent transitively imports soundfile and dateutil at module load time
+          pip install soundfile python-dateutil
           pip install ruff
 
       - name: Ruff lint
