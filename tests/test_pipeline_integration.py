@@ -44,17 +44,17 @@ def test_research_loop_end_to_end(tmp_path, monkeypatch):
     # Фабрика ботов — распознаём роль по system_message
     def fake_build_bot(system_message, tool_names, max_tokens=None):
         msg = system_message
-        if "исследователь" in msg:
+        if "researcher going deep" in msg:
             role = "explorer"
-        elif "РЕПЛАНЕР" in msg:
+        elif "REPLANNER" in msg:
             role = "replanner"
-        elif "СИНТЕЗАТОР" in msg:
+        elif "SYNTHESIZER" in msg:
             role = "synthesizer"
-        elif "FACT-CRITIC" in msg or "STRUCTURE-CRITIC" in msg or "рецензент" in msg:
+        elif "FACT-CRITIC" in msg or "STRUCTURE-CRITIC" in msg or "scientific reviewer" in msg:
             role = "critic"
-        elif "writer" in msg.lower():
+        elif "technical writer" in msg.lower():
             role = "writer"
-        elif "компрессор" in msg:
+        elif "compressor-filter" in msg:
             role = "compressor"
         else:
             role = "unknown"

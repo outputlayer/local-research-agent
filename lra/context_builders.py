@@ -1,11 +1,11 @@
-"""Pure-функции построения контекста из файловых артефактов research/.
+"""Pure functions that build textual context blocks from research/ artifacts.
 
-Выделены из `lra.pipeline` чтобы снизить размер оркестратора и повысить cohesion:
-здесь — только read-only билдеры, которые собирают текстовые блоки
-для user-сообщений агентов (explorer / synthesizer / writer) и fallback-пути.
+Extracted from `lra.pipeline` to shrink the orchestrator and improve cohesion:
+only read-only builders live here, assembling text blocks for user-messages of
+agent roles (explorer / synthesizer / writer) and the fallback path.
 
-Пути к research-артефактам читаются через `config` как namespace,
-чтобы monkeypatch на `config.REJECTED_PATH` (и т.п.) в тестах работал прозрачно.
+Paths to research artifacts are read via `config` as a namespace so tests can
+monkeypatch `config.REJECTED_PATH` (etc.) transparently.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from . import research_memory as research_memory_mod
 
 
 def _build_kb_context(query: str) -> str:
-    """Собирает authoritative-блок из kb.jsonl для writer'а и fallback'а."""
+    """Builds the authoritative block from kb.jsonl for writer and fallback."""
     kb_all = kb_mod.load()
     repos = sorted([a for a in kb_all if a.get("kind") == "repo"],
                    key=lambda a: a.get("stars", 0), reverse=True)[:8]
@@ -26,22 +26,25 @@ def _build_kb_context(query: str) -> str:
         [a for a in kb_all if a.get("kind") == "paper"][:12]
     blocks: list[str] = []
     if repos:
-        blocks.append("Репозитории (для секции '## Реализации'):")
+        blocks.append("Repositories (for '## Implementations' section):")
         for r in repos:
             blocks.append(
                 f"- [repo: {r.get('id','?')} ★{r.get('stars',0)} {r.get('lang','')}] "
                 f"{r.get('url','')} — {r.get('claim','')[:180]}")
     else:
-        blocks.append("Репозитории: в KB нет репо с ★≥10 (используй точную строку-заглушку из промпта).")
+        blocks.append(
+            "Repositories: KB has no repos with ★≥10 (use the exact placeholder "
+            "string from the prompt).")
     if papers:
-        blocks.append("\nPapers (для секций '## Подходы' / '## Бенчмарки и метрики'):")
+        blocks.append(
+            "\nPapers (for '## Approaches' / '## Benchmarks and Metrics' sections):")
         for p in papers:
             blocks.append(f"- [{p.get('id','?')}] {p.get('title','')[:90]} — {p.get('claim','')[:180]}")
     return "\n".join(blocks)
 
 
 def _build_memory_context(*parts: str, k: int = 3) -> str:
-    """Top-k релевантных cross-session memories для текущего запроса/фокуса."""
+    """Top-k relevant cross-session memories for the current query/focus."""
     query = " ".join(part.strip() for part in parts if part and part.strip())
     if not query:
         return ""
@@ -50,7 +53,7 @@ def _build_memory_context(*parts: str, k: int = 3) -> str:
 
 
 def _latest_lessons_tail(max_lines: int = 8, max_chars: int = 1200) -> str:
-    """Хвост lessons.md для записи в run-summary memory."""
+    """Tail of lessons.md, recorded into the run-summary memory."""
     lessons_path = _config.LESSONS_PATH
     if not lessons_path.exists():
         return ""
@@ -62,7 +65,7 @@ def _latest_lessons_tail(max_lines: int = 8, max_chars: int = 1200) -> str:
 
 
 def _build_status_context(query: str, focus: str = "") -> str:
-    """Сжатый статус исследования: покрытие плана, проблемные ветки, rejected evidence."""
+    """Compact research status: plan coverage, problematic branches, rejected evidence."""
     plan = plan_mod.load()
     lines: list[str] = [f"- query: {query}"]
     if focus:
@@ -109,11 +112,10 @@ def _build_status_context(query: str, focus: str = "") -> str:
 
 
 def _fallback_draft_from_kb(query: str) -> None:
-    """Программный fallback если writer не смог 2 раза подряд: собираем минимальный
-    draft.md прямо из kb.jsonl + synthesis.md. Пользователь получит хоть что-то
-    вместо пустоты. Все утверждения — прямые выдержки из claim'ов KB, так что
-    validator пропустит [id] без проблем.
-    """
+    """Programmatic fallback when the writer fails twice in a row: assemble a
+    minimal draft.md straight from kb.jsonl + synthesis.md. The user then gets
+    something rather than nothing. All claims are verbatim excerpts from KB
+    claims so the validator accepts the [id] citations."""
     kb_all = kb_mod.load()
     papers = [a for a in kb_all if a.get("kind") == "paper"][:15]
     repos = sorted([a for a in kb_all if a.get("kind") == "repo"],
@@ -123,31 +125,31 @@ def _fallback_draft_from_kb(query: str) -> None:
     synth = synthesis_path.read_text(encoding="utf-8") if synthesis_path.exists() else ""
 
     lines = [f"# {query}", "",
-             "> Fallback-черновик: собран программно из kb.jsonl и synthesis.md "
-             "(writer не вызвал write_draft после retry).", ""]
-    lines.append("## Краткий ответ")
+             "> Fallback draft: assembled programmatically from kb.jsonl and "
+             "synthesis.md (the writer did not call write_draft after retry).", ""]
+    lines.append("## TL;DR")
     for p in papers[:6]:
         claim_short = (p.get('claim', '') or '').replace('\n', ' ')[:180]
         lines.append(f"- [{p.get('id','?')}] {p.get('title','')[:70]}: {claim_short}")
     lines.append("")
-    lines.append("## Подходы")
+    lines.append("## Approaches")
     for p in papers[:8]:
         lines.append(f"\n### {p.get('title','?')[:80]} [{p.get('id','?')}]")
         claim = (p.get('claim', '') or '').strip()
-        lines.append(claim[:500] if claim else "_(claim отсутствует в kb)_")
+        lines.append(claim[:500] if claim else "_(no claim in kb)_")
     lines.append("")
-    lines.append("## Реализации")
+    lines.append("## Implementations")
     if repos:
         for i, r in enumerate(repos, 1):
             lines.append(f"{i}. [{r.get('id','?')} ★{r.get('stars',0)}] ({r.get('lang','')}) — "
                          f"{(r.get('claim','') or '')[:150]}")
     else:
-        lines.append("Публичных реализаций с ★≥10 в собранной выборке не обнаружено.")
+        lines.append("No public implementations with ★≥10 found in the gathered sample.")
     lines.append("")
-    lines.append("## Ключевые инсайты")
-    lines.append(synth or "_(synthesis.md отсутствует)_")
+    lines.append("## Key Insights")
+    lines.append(synth or "_(synthesis.md missing)_")
     lines.append("")
-    lines.append("## Источники")
+    lines.append("## Sources")
     lines.append("### Papers")
     for i, p in enumerate(papers, 1):
         lines.append(f"{i}. [{p.get('id','?')}] {p.get('title','')[:100]}")
@@ -156,5 +158,5 @@ def _fallback_draft_from_kb(query: str) -> None:
         for i, r in enumerate(repos, 1):
             lines.append(f"{i}. {r.get('id','?')} ({r.get('url','')})")
     draft_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"   🛟 fallback-draft собран программно: {draft_path} "
-          f"({draft_path.stat().st_size} симв)")
+    print(f"   🛟 fallback draft assembled programmatically: {draft_path} "
+          f"({draft_path.stat().st_size} chars)")
