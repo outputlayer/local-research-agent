@@ -94,10 +94,28 @@ def build_bot(system_message: str, tool_names: list, max_tokens: int | None = No
 
 
 def _run_agent(bot: Assistant, messages: list, icon: str) -> list:
+    """Runs a qwen-agent tool-loop and streams progress.
+
+    P11: a soft cap on the number of LLM turns per call protects against
+    MLX pathological loops where the explorer can spin for 20+ minutes
+    inside a single `_run_agent` invocation. When the cap is hit we just
+    stop consuming the generator and return the latest response we have.
+    """
     print(icon + " ", end="", flush=True)
     plain, resp = "", []
+    max_turns = CFG.get("max_agent_turns", 24)
+    turns = 0
+    start = time.time()
+    soft_wall = CFG.get("agent_call_wall_clock_s", 420)  # 7 min per _run_agent
     for resp in bot.run(messages=messages):
         plain = typewriter_print(resp, plain)
+        turns += 1
+        if max_turns and turns >= max_turns:
+            print(f"\n   ⏱️  P11: cap max_agent_turns={max_turns} reached — stopping tool loop")
+            break
+        if soft_wall and (time.time() - start) > soft_wall:
+            print(f"\n   ⏱️  P11: cap agent_call_wall_clock_s={soft_wall}s reached — stopping tool loop")
+            break
     print()
     return resp
 
