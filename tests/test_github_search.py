@@ -28,7 +28,7 @@ def _err(stderr: str, rc: int = 1):
 
 def test_empty_query_rejected(gh_tool):
     tool, _, _ = gh_tool
-    assert "обязателен" in tool.call({"query": ""})
+    assert "is required" in tool.call({"query": ""})
 
 
 def test_repos_happy_path(gh_tool, monkeypatch):
@@ -79,7 +79,7 @@ def test_no_results_message(gh_tool, monkeypatch):
     tool, tools_mod, _ = gh_tool
     monkeypatch.setattr(tools_mod.cli_run, "run", _ok("[]"))
     out = tool.call({"query": "nonexistent-" + "x" * 20})
-    assert "нет результатов" in out.lower()
+    assert "no" in out.lower()
 
 
 def test_auth_error_suggests_login(gh_tool, monkeypatch):
@@ -101,7 +101,7 @@ def test_dedup_via_querylog(gh_tool, monkeypatch):
     monkeypatch.setattr(tools_mod.cli_run, "run", _ok("[]"))
     tool.call({"query": "autonomous agents", "type": "repos"})
     out2 = tool.call({"query": "autonomous agents", "type": "repos"})
-    assert "ОТКАЗ" in out2
+    assert "REJECTED" in out2
     assert "gh-repos" in (tmp / "querylog.md").read_text(encoding="utf-8")
 
 
@@ -160,7 +160,7 @@ def test_explicit_min_stars_param_takes_precedence(gh_tool, monkeypatch):
 def test_empty_query_after_stripping_qualifiers_returns_error(gh_tool, monkeypatch):
     tool, _, _ = gh_tool
     out = tool.call({"query": "stars:>=10 language:python", "type": "repos"})
-    assert "пустой" in out.lower() or "ошибка" in out.lower()
+    assert "пустой" in out.lower() or "error" in out.lower()
 
 
 def test_long_query_rejected_before_network(gh_tool, monkeypatch):
@@ -178,8 +178,8 @@ def test_long_query_rejected_before_network(gh_tool, monkeypatch):
         "type": "repos",
     })
     assert called["n"] == 0, "длинный query не должен вызывать gh CLI"
-    assert "отказ" in out.lower()
-    assert "слишком длинный" in out.lower()
+    assert "reject" in out.lower()
+    assert "too long" in out.lower()
     # Должна быть конкретная подсказка — сокращённый вариант
     assert "langgraph" in out.lower()
 
@@ -189,4 +189,4 @@ def test_short_query_zero_results_still_works(gh_tool, monkeypatch):
     tool, tools_mod, _ = gh_tool
     monkeypatch.setattr(tools_mod.cli_run, "run", _ok("[]"))
     out = tool.call({"query": "langgraph orchestration", "type": "repos"})
-    assert "нет результатов" in out.lower() or "отказ" in out.lower()
+    assert "no" in out.lower() or "reject" in out.lower()

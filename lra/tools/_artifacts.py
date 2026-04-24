@@ -1,8 +1,8 @@
 """Artifact tools: notes/draft/plan/synthesis/lessons/querylog + kb + plan mutations.
 
-Мелкие тулы, пишущие/читающие файлы-артефакты под research/. Импортируют пути
-через `from .. import config as _cfg` (не прямым `from ..config import X`), чтобы
-тесты могли monkeypatch-ить `config.NOTES_PATH` и т.д. — runtime lookup работает.
+Small tools that read/write artifact files under research/. They import paths via
+`from .. import config as _cfg` (not direct `from ..config import X`) so that
+tests can monkeypatch `config.NOTES_PATH` etc. — runtime lookup works.
 """
 from __future__ import annotations
 
@@ -25,57 +25,57 @@ from ._helpers import (
 
 @register_tool("compact_notes")
 class CompactNotes(BaseTool):
-    description = "Перезаписывает research/notes.md сжатым содержанием."
-    parameters = [{"name": "content", "type": "string", "description": "Сжатый markdown", "required": True}]
+    description = "Overwrites research/notes.md with compressed content."
+    parameters = [{"name": "content", "type": "string", "description": "Compressed markdown", "required": True}]
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = get_content(params)
         old = _cfg.NOTES_PATH.stat().st_size if _cfg.NOTES_PATH.exists() else 0
         _cfg.NOTES_PATH.write_text(content, encoding='utf-8')
-        return f"notes.md: {old} → {len(content)} симв (сжато в {max(1, old // max(1, len(content)))}x)"
+        return f"notes.md: {old} → {len(content)} chars (compressed by {max(1, old // max(1, len(content)))}x)"
 
 
 @register_tool("write_draft")
 class WriteDraft(BaseTool):
-    description = "Перезаписывает черновик research/draft.md с нуля."
+    description = "Overwrites the draft research/draft.md from scratch."
     parameters = [{"name": "content", "type": "string", "description": "Markdown", "required": True}]
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = get_content(params)
         _cfg.DRAFT_PATH.write_text(content, encoding='utf-8')
-        return f"draft.md сохранён ({len(content)} симв)"
+        return f"draft.md saved ({len(content)} chars)"
 
 
 @register_tool("append_draft")
 class AppendDraft(BaseTool):
-    description = ("Добавляет секцию в конец research/draft.md. "
-                   "Предпочтительно write_draft+много append_draft, чем один огромный write_draft.")
-    parameters = [{"name": "content", "type": "string", "description": "Markdown-секция", "required": True}]
+    description = ("Appends a section at the end of research/draft.md. "
+                   "Prefer write_draft + multiple append_draft over one huge write_draft.")
+    parameters = [{"name": "content", "type": "string", "description": "Markdown section", "required": True}]
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
         content = get_content(params)
         with _cfg.DRAFT_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
-        return f"draft.md +{len(content)} симв (всего {_cfg.DRAFT_PATH.stat().st_size})"
+        return f"draft.md +{len(content)} chars (total {_cfg.DRAFT_PATH.stat().st_size})"
 
 
 @register_tool("read_draft")
 class ReadDraft(BaseTool):
-    description = "Читает research/draft.md."
+    description = "Reads research/draft.md."
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return _cfg.DRAFT_PATH.read_text(encoding='utf-8') if _cfg.DRAFT_PATH.exists() else "(пусто)"
+        return _cfg.DRAFT_PATH.read_text(encoding='utf-8') if _cfg.DRAFT_PATH.exists() else "(empty)"
 
 
 @register_tool("append_notes")
 class AppendNotes(BaseTool):
-    description = ("Добавляет новый фрагмент знаний в research/notes.md "
-                   "(подтема, arXiv id, ключевые факты).")
-    parameters = [{"name": "content", "type": "string", "description": "Markdown-фрагмент", "required": True}]
+    description = ("Appends a new knowledge fragment to research/notes.md "
+                   "(sub-topic, arXiv id, key facts).")
+    parameters = [{"name": "content", "type": "string", "description": "Markdown fragment", "required": True}]
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
@@ -84,13 +84,13 @@ class AppendNotes(BaseTool):
             known, unknown = verify_ids_against_kb(content)
             if unknown:
                 return (
-                    f"ОТКАЗ: в заметке упомянуты arxiv-id, которых НЕТ в kb.jsonl: "
-                    f"{sorted(unknown)}. Добавь их сначала через kb_add (для каждого id: "
+                    f"REJECTED: the note mentions arxiv-ids that are NOT in kb.jsonl: "
+                    f"{sorted(unknown)}. First add them via kb_add (for each id: "
                     "kb_add(id=..., kind='paper', title=..., claim=..., url=...)) "
-                    "или через hf_papers/kb_search, чтобы получить верифицированную запись, "
-                    "затем СРАЗУ ЖЕ повтори append_notes с тем же самым content. "
-                    "Не пиши промежуточных ответов — только tool-call kb_add, затем tool-call append_notes. "
-                    f"Уже известны: {sorted(known) or '(пусто)'}.")
+                    "or via hf_papers/kb_search to get a verified record, "
+                    "then IMMEDIATELY repeat append_notes with the same content. "
+                    "Do not write intermediate replies — only the kb_add tool-call, then the append_notes tool-call. "
+                    f"Already known: {sorted(known) or '(empty)'}.")
         ids = extract_ids(content)
         if _cfg.CFG.get("strict_domain_gate", True) and ids:
             passed, reason, o_h, o_s = domain_gate(content)
@@ -99,43 +99,43 @@ class AppendNotes(BaseTool):
                 h_kws, s_kws = _kw(_cfg.PLAN_PATH.read_text(encoding="utf-8"))
                 _log_rejected(content, ids, reason, h_kws, s_kws, o_h, o_s)
                 hint = {
-                    "no_core_hit": "ни одного core-термина из заголовка темы",
-                    "weak_overlap": f"только 1 совпадение (нужно ≥2, из них ≥1 core). "
+                    "no_core_hit": "no core term from the topic header",
+                    "weak_overlap": f"only 1 match (need ≥2, at least 1 core). "
                                     f"Header hits: {sorted(o_h) or '∅'}, "
                                     f"seeds hits: {sorted(o_s) or '∅'}",
                 }.get(reason, reason)
-                return (f"ОТКАЗ (domain gate, {reason}): заметка с id {sorted(ids)} "
-                        f"не относится к теме плана — {hint}. Это paper из смежного "
-                        "домена, не лей в KB/notes. Записано в rejected.jsonl.")
+                return (f"REJECTED (domain gate, {reason}): note with ids {sorted(ids)} "
+                        f"does not relate to the plan topic — {hint}. This is a paper from an "
+                        "adjacent domain, do not push it into KB/notes. Logged to rejected.jsonl.")
         with _cfg.NOTES_PATH.open('a', encoding='utf-8') as f:
             f.write("\n\n" + content.strip() + "\n")
-        return f"notes.md +{len(content)} симв (всего {_cfg.NOTES_PATH.stat().st_size} симв)"
+        return f"notes.md +{len(content)} chars (total {_cfg.NOTES_PATH.stat().st_size} chars)"
 
 
 @register_tool("read_notes")
 class ReadNotes(BaseTool):
-    description = "Читает накопленные заметки research/notes.md."
+    description = "Reads accumulated notes from research/notes.md."
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
         if not _cfg.NOTES_PATH.exists():
-            return "(заметок нет)"
+            return "(no notes)"
         text = _cfg.NOTES_PATH.read_text(encoding='utf-8')
         return text[-20000:] if len(text) > 20000 else text
 
 
 @register_tool("read_notes_focused")
 class ReadNotesFocused(BaseTool):
-    """Anti-drift фильтр: возвращает только блоки notes.md, релевантные focus-запросу."""
-    description = ("Читает notes.md с anti-drift фильтром по focus-запросу. "
-                   "Возвращает только блоки, релевантные focus (jaccard keyword overlap).")
+    """Anti-drift filter: returns only blocks of notes.md relevant to the focus query."""
+    description = ("Reads notes.md with an anti-drift filter by focus query. "
+                   "Returns only blocks relevant to focus (jaccard keyword overlap).")
     parameters = [
         {"name": "focus", "type": "string",
-         "description": "Фокусная фраза (например, из [FOCUS] plan.md)", "required": True},
+         "description": "Focus phrase (e.g. the [FOCUS] from plan.md)", "required": True},
         {"name": "max_chars", "type": "integer",
-         "description": "Лимит символов вывода (default 4000)", "required": False},
+         "description": "Output char cap (default 4000)", "required": False},
         {"name": "min_jaccard", "type": "number",
-         "description": "Порог релевантности 0..1 (default 0.08)", "required": False},
+         "description": "Relevance threshold 0..1 (default 0.08)", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
@@ -149,10 +149,10 @@ class ReadNotesFocused(BaseTool):
         min_jac = float(args.get("min_jaccard") or 0.08)
 
         if not _cfg.NOTES_PATH.exists():
-            return "(заметок нет)"
+            return "(no notes)"
         text = _cfg.NOTES_PATH.read_text(encoding='utf-8')
         if not text.strip():
-            return "(заметки пустые)"
+            return "(notes are empty)"
 
         focus_kws = _kws(focus)
         if not focus_kws:
@@ -164,8 +164,8 @@ class ReadNotesFocused(BaseTool):
         relevant.sort(key=lambda x: x[1], reverse=True)
 
         if not relevant:
-            return (f"(0/{len(blocks)} блоков прошли фильтр jaccard>={min_jac} "
-                    f"для focus='{focus[:60]}'; рассмотри более широкий порог или read_notes)")
+            return (f"(0/{len(blocks)} blocks passed jaccard>={min_jac} filter "
+                    f"for focus='{focus[:60]}'; try a lower threshold or use read_notes)")
 
         placeholder_header_len = 80
         budget = max_chars - placeholder_header_len
@@ -178,16 +178,16 @@ class ReadNotesFocused(BaseTool):
             included.append(chunk)
             total += len(chunk)
         truncated = len(included) < len(relevant)
-        header = (f"[focus-filter: {len(included)}/{len(blocks)} блоков, "
+        header = (f"[focus-filter: {len(included)}/{len(blocks)} blocks, "
                   f"jaccard>={min_jac}"
-                  f"{f', обрезано по max_chars={max_chars}' if truncated else ''}]\n\n")
+                  f"{f', truncated by max_chars={max_chars}' if truncated else ''}]\n\n")
         return header + "\n".join(included)
 
 
 @register_tool("write_plan")
 class WritePlan(BaseTool):
-    description = "Перезаписывает план ресёрча в research/plan.md."
-    parameters = [{"name": "content", "type": "string", "description": "Markdown план", "required": True}]
+    description = "Overwrites the research plan in research/plan.md."
+    parameters = [{"name": "content", "type": "string", "description": "Markdown plan", "required": True}]
 
     def call(self, params: str, **kwargs) -> str:
         ensure_dir()
@@ -200,17 +200,17 @@ class WritePlan(BaseTool):
 
 @register_tool("read_plan")
 class ReadPlan(BaseTool):
-    description = "Читает текущий план research/plan.md."
+    description = "Reads the current plan from research/plan.md."
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return _cfg.PLAN_PATH.read_text(encoding='utf-8') if _cfg.PLAN_PATH.exists() else "(плана нет)"
+        return _cfg.PLAN_PATH.read_text(encoding='utf-8') if _cfg.PLAN_PATH.exists() else "(no plan)"
 
 
 @register_tool("write_synthesis")
 class WriteSynthesis(BaseTool):
-    description = ("Записывает research/synthesis.md — НОВЫЕ мысли: "
-                   "мосты, противоречия, пробелы, экстраполяции, testable гипотезы.")
+    description = ("Writes research/synthesis.md — NEW thoughts: "
+                   "bridges, contradictions, gaps, extrapolations, testable hypotheses.")
     parameters = [{"name": "content", "type": "string", "description": "Markdown", "required": True}]
 
     def call(self, params: str, **kwargs) -> str:
@@ -218,22 +218,22 @@ class WriteSynthesis(BaseTool):
         content = get_content(params)
         _cfg.SYNTHESIS_PATH.write_text(content, encoding='utf-8')
         tags = sum(content.count(t) for t in ("[BRIDGE]", "[CONTRADICTION]", "[GAP]", "[EXTRAPOLATION]", "[REUSE]", "[TESTABLE]"))
-        return f"synthesis.md ({len(content)} симв, {tags} инсайтов)"
+        return f"synthesis.md ({len(content)} chars, {tags} insights)"
 
 
 @register_tool("read_synthesis")
 class ReadSynthesis(BaseTool):
-    description = "Читает research/synthesis.md — новые инсайты после анализа notes."
+    description = "Reads research/synthesis.md — new insights after analyzing notes."
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return _cfg.SYNTHESIS_PATH.read_text(encoding='utf-8') if _cfg.SYNTHESIS_PATH.exists() else "(синтеза нет)"
+        return _cfg.SYNTHESIS_PATH.read_text(encoding='utf-8') if _cfg.SYNTHESIS_PATH.exists() else "(no synthesis)"
 
 
 @register_tool("append_lessons")
 class AppendLessons(BaseTool):
-    description = ("Записывает урок итерации в research/lessons.md (Reflexion-память). "
-                   "Формат: что сработало, что нет, чего избегать.")
+    description = ("Writes an iteration lesson to research/lessons.md (Reflexion memory). "
+                   "Format: what worked, what did not, what to avoid.")
     parameters = [{"name": "content", "type": "string", "description": "Markdown", "required": True}]
 
     def call(self, params: str, **kwargs) -> str:
@@ -241,26 +241,26 @@ class AppendLessons(BaseTool):
         content = get_content(params)
         with _cfg.LESSONS_PATH.open('a', encoding='utf-8') as f:
             f.write("\n" + content.strip() + "\n")
-        return f"lessons.md +{len(content)} симв"
+        return f"lessons.md +{len(content)} chars"
 
 
 @register_tool("read_lessons")
 class ReadLessons(BaseTool):
-    description = "Читает lessons.md — уроки прошлых итераций, что не повторять."
+    description = "Reads lessons.md — lessons from past iterations, what not to repeat."
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
-        return _cfg.LESSONS_PATH.read_text(encoding='utf-8') if _cfg.LESSONS_PATH.exists() else "(уроков ещё нет)"
+        return _cfg.LESSONS_PATH.read_text(encoding='utf-8') if _cfg.LESSONS_PATH.exists() else "(no lessons yet)"
 
 
 @register_tool("read_querylog")
 class ReadQueryLog(BaseTool):
-    description = "Читает список уже выполненных hf_papers запросов — НЕ повторяй их."
+    description = "Reads the list of already-executed hf_papers queries — do NOT repeat them."
     parameters = []
 
     def call(self, params: str, **kwargs) -> str:
         if not _cfg.QUERYLOG_PATH.exists():
-            return "(запросов ещё не было)"
+            return "(no queries yet)"
         text = _cfg.QUERYLOG_PATH.read_text(encoding='utf-8')
         lines, seen = [], set()
         for ln in reversed(text.splitlines()):
@@ -275,22 +275,22 @@ class ReadQueryLog(BaseTool):
 @register_tool("kb_add")
 class KbAdd(BaseTool):
     description = (
-        "Добавляет атом знания в структурированную базу research/kb.jsonl. "
-        "Вызывай каждый раз, когда узнал НОВЫЙ факт/репозиторий/авторов. "
-        "Это параллельно append_notes, но для программного поиска. "
-        "kind: 'paper' (для arxiv-id) или 'repo' (для owner/name). "
-        "claim: 1-3 предложения что именно узнал."
+        "Adds a knowledge atom to the structured base research/kb.jsonl. "
+        "Call every time you learn a NEW fact/repository/authors. "
+        "Runs in parallel with append_notes but enables programmatic search. "
+        "kind: 'paper' (for arxiv-id) or 'repo' (for owner/name). "
+        "claim: 1-3 sentences on what exactly you learned."
     )
     parameters = [
-        {"name": "id", "type": "string", "description": "arxiv-id или owner/name", "required": True},
-        {"name": "kind", "type": "string", "description": "'paper' или 'repo'", "required": True},
-        {"name": "claim", "type": "string", "description": "1-3 предложения о сути", "required": True},
-        {"name": "title", "type": "string", "description": "заголовок/название", "required": False},
-        {"name": "authors", "type": "string", "description": "авторы (для paper)", "required": False},
-        {"name": "url", "type": "string", "description": "ссылка", "required": False},
-        {"name": "stars", "type": "integer", "description": "звёзды (для repo)", "required": False},
-        {"name": "lang", "type": "string", "description": "язык (для repo)", "required": False},
-        {"name": "topic", "type": "string", "description": "текущий FOCUS", "required": False},
+        {"name": "id", "type": "string", "description": "arxiv-id or owner/name", "required": True},
+        {"name": "kind", "type": "string", "description": "'paper' or 'repo'", "required": True},
+        {"name": "claim", "type": "string", "description": "1-3 sentences on the essence", "required": True},
+        {"name": "title", "type": "string", "description": "title", "required": False},
+        {"name": "authors", "type": "string", "description": "authors (for paper)", "required": False},
+        {"name": "url", "type": "string", "description": "link", "required": False},
+        {"name": "stars", "type": "integer", "description": "stars (for repo)", "required": False},
+        {"name": "lang", "type": "string", "description": "language (for repo)", "required": False},
+        {"name": "topic", "type": "string", "description": "current FOCUS", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
@@ -298,9 +298,9 @@ class KbAdd(BaseTool):
         p = parse_args(params)
         kind = (p.get("kind") or "").strip().lower()
         if kind not in ("paper", "repo"):
-            return "ошибка: kind должен быть 'paper' или 'repo'"
+            return "error: kind must be 'paper' or 'repo'"
         if not p.get("id") or not p.get("claim"):
-            return "ошибка: id и claim обязательны"
+            return "error: id and claim are required"
         atom = kb_mod.Atom(
             id=p["id"].strip(),
             kind=kind,
@@ -319,112 +319,111 @@ class KbAdd(BaseTool):
 @register_tool("kb_search")
 class KbSearch(BaseTool):
     description = (
-        "Ищет в research/kb.jsonl уже известные факты/репо по запросу (BM25). "
-        "Используй ПЕРЕД тем как делать новый hf_papers/github_search — вдруг мы уже это знаем. "
-        "Возвращает top-k атомов с id, title и claim."
+        "Searches research/kb.jsonl for already-known facts/repos by query (BM25). "
+        "Use BEFORE issuing a new hf_papers/github_search — maybe we already know it. "
+        "Returns top-k atoms with id, title and claim."
     )
     parameters = [
-        {"name": "query", "type": "string", "description": "запрос на естественном языке", "required": True},
-        {"name": "k", "type": "integer", "description": "сколько результатов (1-10)", "required": False},
+        {"name": "query", "type": "string", "description": "natural-language query", "required": True},
+        {"name": "k", "type": "integer", "description": "how many results (1-10)", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
         p = parse_args(params)
         query = (p.get("query") or "").strip()
         if not query:
-            return "ошибка: query обязателен"
+            return "error: query is required"
         k = max(1, min(int(p.get("k", 5)), 10))
         hits = kb_mod.search(query, k=k)
         if not hits:
-            return "(в kb пока ничего релевантного)"
+            return "(nothing relevant in kb yet)"
         return kb_mod.format_atoms(hits)
 
 
-# ── Структурированный план: явные мутации через тулы ───────────────────────
+# ── Structured plan: explicit mutations via tools ──────────────────────────
 def _require_plan() -> plan_mod.Plan:
     p = plan_mod.load()
     if not p:
-        raise RuntimeError("plan.json отсутствует — сначала запусти новый ресёрч")
+        raise RuntimeError("plan.json missing — start a new research first")
     return p
 
 
 @register_tool("plan_add_task")
 class PlanAddTask(BaseTool):
     description = (
-        "Добавить новую под-задачу в план. Используй когда в ходе ресёрча всплыла ВАЖНАЯ "
-        "под-тема, которой нет в исходном плане (origin=emerged). parent опционален — "
-        "если указан id существующей задачи, новая станет её потомком (2-й уровень дерева). "
-        "Лимит: MAX_OPEN_TASKS=8 открытых задач, переполнение → ошибка."
+        "Add a new sub-task to the plan. Use when an IMPORTANT sub-topic emerged during "
+        "research that was not in the initial plan (origin=emerged). parent is optional — "
+        "if set to an existing task id, the new task becomes its child (2nd tree level). "
+        "Limit: MAX_OPEN_TASKS=8 open tasks, overflow → error."
     )
     parameters = [
-        {"name": "title", "type": "string", "description": "Краткое название задачи", "required": True},
-        {"name": "parent", "type": "string", "description": "id родителя (T1/T2.3/...) или пусто", "required": False},
-        {"name": "why", "type": "string", "description": "Почему эту задачу добавляем (для аудита)", "required": False},
+        {"name": "title", "type": "string", "description": "Short task title", "required": True},
+        {"name": "parent", "type": "string", "description": "parent id (T1/T2.3/...) or empty", "required": False},
+        {"name": "why", "type": "string", "description": "Why this task is added (for audit)", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
         p = parse_args(params)
         title = (p.get("title") or "").strip()
         if not title:
-            return "ошибка: title обязателен"
+            return "error: title is required"
         parent = (p.get("parent") or "").strip() or None
         why = (p.get("why") or "").strip()
         try:
             plan = _require_plan()
             task = plan.add_task(title, parent=parent, origin="emerged",
-                                 iter_=0, why=why or "модель решила расширить план")
+                                 iter_=0, why=why or "model decided to extend the plan")
             plan_mod.save(plan)
-            return (f"добавлено: [{task.id}] {task.title}"
+            return (f"added: [{task.id}] {task.title}"
                     f"{' (parent=' + parent + ')' if parent else ''} — {len(plan.open_tasks())}/"
                     f"{plan_mod.MAX_OPEN_TASKS} open")
         except Exception as e:
-            return f"ошибка: {e}"
+            return f"error: {e}"
 
 
 @register_tool("plan_close_task")
 class PlanCloseTask(BaseTool):
     description = (
-        "Пометить задачу как выполненную (status=done). Используй когда по под-теме "
-        "собраны достаточные факты в notes/kb. Укажи evidence — список ключей из kb "
-        "или arxiv-id из notes, подтверждающих закрытие."
+        "Mark a task as done (status=done). Use when enough facts on the sub-topic have "
+        "been collected in notes/kb. Provide evidence — a list of kb keys or arxiv-ids "
+        "from notes that support closing."
     )
     parameters = [
-        {"name": "id", "type": "string", "description": "id задачи (например, T2 или T2.1)", "required": True},
+        {"name": "id", "type": "string", "description": "task id (e.g. T2 or T2.1)", "required": True},
         {"name": "evidence", "type": "string",
-         "description": "Через запятую: ключи kb (kb:PaperId) или arxiv-id (2309.12345)", "required": False},
-        {"name": "why", "type": "string", "description": "Краткое резюме что нашли", "required": False},
+         "description": "Comma-separated: kb keys (kb:PaperId) or arxiv-ids (2309.12345)", "required": False},
+        {"name": "why", "type": "string", "description": "Short summary of what was found", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
         p = parse_args(params)
         tid = (p.get("id") or "").strip()
         if not tid:
-            return "ошибка: id обязателен"
+            return "error: id is required"
         evidence_raw = (p.get("evidence") or "").strip()
         evidence = [e.strip() for e in evidence_raw.split(",") if e.strip()] if evidence_raw else []
         why = (p.get("why") or "").strip()
         try:
             plan = _require_plan()
-            t = plan.close_task(tid, iter_=0, evidence=evidence, why=why or "закрыта моделью")
+            t = plan.close_task(tid, iter_=0, evidence=evidence, why=why or "closed by model")
             plan_mod.save(plan)
-            return f"закрыто: [{t.id}] {t.title}  evidence={len(t.evidence_refs)}"
+            return f"closed: [{t.id}] {t.title}  evidence={len(t.evidence_refs)}"
         except Exception as e:
-            return f"ошибка: {e}"
+            return f"error: {e}"
 
 
 @register_tool("plan_split_task")
 class PlanSplitTask(BaseTool):
     description = (
-        "Декомпозировать задачу на 2-4 подзадачи. Используй когда задача оказалась "
-        "слишком широкой и её нельзя закрыть одной итерацией. Исходная задача "
-        "становится контейнером (status=dropped + split-container), подзадачи — "
-        "её детьми в дереве."
+        "Decompose a task into 2-4 sub-tasks. Use when a task is too broad to close in "
+        "one iteration. The original task becomes a container (status=dropped + "
+        "split-container), sub-tasks become its children in the tree."
     )
     parameters = [
-        {"name": "id", "type": "string", "description": "id задачи для декомпозиции", "required": True},
+        {"name": "id", "type": "string", "description": "task id to decompose", "required": True},
         {"name": "subtitles", "type": "string",
-         "description": "Подзадачи через ' | ' (минимум 2)", "required": True},
-        {"name": "why", "type": "string", "description": "Почему разделяем", "required": False},
+         "description": "Sub-tasks separated by ' | ' (minimum 2)", "required": True},
+        {"name": "why", "type": "string", "description": "Why split", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
@@ -432,18 +431,18 @@ class PlanSplitTask(BaseTool):
         tid = (p.get("id") or "").strip()
         raw = (p.get("subtitles") or "").strip()
         if not tid or not raw:
-            return "ошибка: id и subtitles обязательны"
+            return "error: id and subtitles are required"
         subs = [s.strip() for s in raw.split("|") if s.strip()]
         if len(subs) < 2:
-            return "ошибка: нужно минимум 2 подзадачи (разделитель ' | ')"
+            return "error: need at least 2 sub-tasks (separator ' | ')"
         why = (p.get("why") or "").strip()
         try:
             plan = _require_plan()
-            children = plan.split_task(tid, subs, iter_=0, why=why or "декомпозиция моделью")
+            children = plan.split_task(tid, subs, iter_=0, why=why or "decomposition by model")
             plan_mod.save(plan)
-            return f"разбито [{tid}] → " + ", ".join(f"[{c.id}] {c.title[:40]}" for c in children)
+            return f"split [{tid}] → " + ", ".join(f"[{c.id}] {c.title[:40]}" for c in children)
         except Exception as e:
-            return f"ошибка: {e}"
+            return f"error: {e}"
 
 
 _wrap_module_tools(globals(), __name__)

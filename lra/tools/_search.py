@@ -1,12 +1,12 @@
-"""Search-тулы: hf_papers, arxiv_search, github_search.
+"""Search tools: hf_papers, arxiv_search, github_search.
 
-Делят общие helpers для HTTP-фетчинга arXiv (`_fetch_text`, `_parse_arxiv_feed`),
-автосохраняют результаты в KB через `gate_paper_for_kb`, используют общий
+They share helpers for arXiv HTTP fetching (`_fetch_text`, `_parse_arxiv_feed`),
+auto-save results to KB via `gate_paper_for_kb`, and use a common
 querylog/seen_queries dedup.
 
-ВАЖНО: helpers вызываются через qualified `_helpers.X`, чтобы тесты могли
-monkeypatch-ить `lra.tools._helpers._fetch_text` (иначе import-time binding
-заморозит оригинал в этом модуле).
+IMPORTANT: helpers are called via the qualified `_helpers.X` form so that
+tests can monkeypatch `lra.tools._helpers._fetch_text` (otherwise import-time
+binding would freeze the original in this module).
 """
 from __future__ import annotations
 
@@ -27,11 +27,11 @@ from . import _helpers
 
 @register_tool("hf_papers")
 class HfPapers(BaseTool):
-    description = ("Поиск научных статей на Hugging Face Papers через локальный `hf` CLI. "
-                   "Возвращает id (arxiv), заголовок, авторов, дату и abstract.")
+    description = ("Searches scientific papers on Hugging Face Papers via the local `hf` CLI. "
+                   "Returns id (arxiv), title, authors, date and abstract.")
     parameters = [
-        {"name": "query", "type": "string", "description": "Запрос", "required": True},
-        {"name": "limit", "type": "integer", "description": "Сколько результатов (1-10)", "required": False},
+        {"name": "query", "type": "string", "description": "Query", "required": True},
+        {"name": "limit", "type": "integer", "description": "How many results (1-10)", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
@@ -39,29 +39,29 @@ class HfPapers(BaseTool):
         query = p["query"]
         limit = max(1, min(int(p.get("limit", 5)), 10))
         if normalize_query(query) in seen_queries():
-            return (f"ОТКАЗ: запрос '{query}' уже выполнялся в этой сессии. "
-                    "Переформулируй (другие ключевые слова, автор, год, техника) или читай read_notes.")
+            return (f"REJECTED: query '{query}' has already been executed in this session. "
+                    "Rephrase (different keywords, author, year, technique) or read read_notes.")
         fuzzy = is_similar_to_seen(query)
         if fuzzy and fuzzy != query:
-            return (f"ОТКАЗ: запрос '{query}' слишком похож на уже выполненный '{fuzzy}'. "
-                    "Смени тему (другие термины, автор, год) или перейди к другому [TODO].")
+            return (f"REJECTED: query '{query}' is too similar to an already executed '{fuzzy}'. "
+                    "Change the topic (different terms, author, year) or move to another [TODO].")
         log_query(query)
         r = cli_run.run(
             ["hf", "papers", "search", query, "--limit", str(limit * 2), "--format", "json"],
             timeout=30,
         )
         if r.returncode == 127:
-            return "ошибка: `hf` CLI не найден в PATH (pip install huggingface_hub[cli])"
+            return "error: `hf` CLI not found in PATH (pip install huggingface_hub[cli])"
         if r.returncode == 124:
-            return "таймаут поиска hf_papers"
+            return "hf_papers search timeout"
         if not r.ok:
-            return f"ошибка: {r.stderr.strip()[:500]}"
+            return f"error: {r.stderr.strip()[:500]}"
         try:
             data = json.loads(r.stdout)
         except Exception:
-            return f"не удалось распарсить JSON: {r.stdout[:300]}"
+            return f"failed to parse JSON: {r.stdout[:300]}"
         if not data:
-            return f"нет результатов: {query}"
+            return f"no results: {query}"
         data.sort(key=lambda x: x.get("published_at", ""), reverse=True)
         from datetime import datetime, timedelta
         cutoff = (datetime.now(UTC) - timedelta(days=_cfg.ARXIV_RECENT_DAYS)).date().isoformat()
@@ -71,15 +71,15 @@ class HfPapers(BaseTool):
             data = fresh[:limit]
         else:
             data = data[:limit]
-            stale_note = (f"\n\n⚠️  все результаты старше {_cfg.ARXIV_RECENT_DAYS // 365} лет "
-                          f"(cutoff={cutoff}) — показаны как fallback")
+            stale_note = (f"\n\n⚠️  all results older than {_cfg.ARXIV_RECENT_DAYS // 365} years "
+                          f"(cutoff={cutoff}) — shown as fallback")
         lines = []
         auto_saved = 0
         auto_filtered = 0
         for paper in data:
             authors = ", ".join(a["name"] for a in paper.get("authors", [])[:4])
             if len(paper.get("authors", [])) > 4:
-                authors += " и др."
+                authors += " et al."
             title = " ".join(paper.get("title", "").split())
             summary = " ".join(paper.get("summary", "").split())[:800]
             date = paper.get("published_at", "")[:10]
@@ -104,9 +104,9 @@ class HfPapers(BaseTool):
                     _helpers.log.debug("kb auto-save paper failed %s: %s", pid, e)
         footer_parts = []
         if auto_saved:
-            footer_parts.append(f"📥 авто-сохранено в kb: {auto_saved}")
+            footer_parts.append(f"📥 auto-saved to kb: {auto_saved}")
         if auto_filtered:
-            footer_parts.append(f"🚫 отфильтровано domain gate: {auto_filtered}")
+            footer_parts.append(f"🚫 filtered by domain gate: {auto_filtered}")
         footer = f"\n\n({', '.join(footer_parts)})" if footer_parts else ""
         return "\n\n".join(lines) + footer + stale_note
 
@@ -114,19 +114,19 @@ class HfPapers(BaseTool):
 @register_tool("arxiv_search")
 class ArxivSearch(BaseTool):
     description = (
-        "Fallback-поиск статей через arXiv API. Используй когда hf_papers пуст, "
-        "устарел или не нашёл нужную подтему. Возвращает arxiv-id, заголовок, "
-        "авторов, дату и abstract.\n"
-        "ВАЖНО: для узких доменов (signal processing, info theory, crypto) указывай "
-        "categories=['eess.SP','cs.IT','cs.CR'] — это сильно повышает релевантность "
-        "и режет шум из NLP/CV. Список arxiv категорий: arxiv.org/category_taxonomy."
+        "Fallback paper search via the arXiv API. Use when hf_papers is empty, "
+        "stale or did not find the required sub-topic. Returns arxiv-id, title, "
+        "authors, date and abstract.\n"
+        "IMPORTANT: for narrow domains (signal processing, info theory, crypto) pass "
+        "categories=['eess.SP','cs.IT','cs.CR'] — it sharply increases relevance "
+        "and filters out noise from NLP/CV. Full category list: arxiv.org/category_taxonomy."
     )
     parameters = [
-        {"name": "query", "type": "string", "description": "Запрос", "required": True},
-        {"name": "limit", "type": "integer", "description": "Сколько результатов (1-10)", "required": False},
+        {"name": "query", "type": "string", "description": "Query", "required": True},
+        {"name": "limit", "type": "integer", "description": "How many results (1-10)", "required": False},
         {"name": "categories", "type": "array",
-         "description": "Опц. arxiv-категории (eess.SP, cs.IT, cs.CR, cs.LG, ...). "
-                        "Если задано — поиск ограничен этими категориями (OR).",
+         "description": "Optional arxiv categories (eess.SP, cs.IT, cs.CR, cs.LG, ...). "
+                        "If set — search is restricted to these categories (OR).",
          "required": False},
     ]
 
@@ -134,13 +134,13 @@ class ArxivSearch(BaseTool):
         p = parse_args(params)
         query = (p.get("query") or "").strip()
         if not query:
-            return "ошибка: query обязателен"
+            return "error: query is required"
         limit = max(1, min(int(p.get("limit", 5)), 10))
-        # Категории: список или CSV-строка
+        # Categories: list or CSV string
         raw_cats = p.get("categories") or []
         if isinstance(raw_cats, str):
             raw_cats = [c.strip() for c in raw_cats.split(",") if c.strip()]
-        # Sanitize: только токены формата letters[.letters], не длиннее 20 симв
+        # Sanitize: only tokens shaped like letters[.letters], length ≤ 25 chars
         import re as _re
         cats = [c for c in raw_cats
                 if isinstance(c, str) and _re.fullmatch(r"[a-z\-]+(?:\.[A-Za-z\-]+)?", c)
@@ -148,12 +148,12 @@ class ArxivSearch(BaseTool):
         cat_suffix = " [cats=" + ",".join(cats) + "]" if cats else ""
         dedup_key = f"arxiv: {query}{cat_suffix}"
         if normalize_query(dedup_key) in seen_queries():
-            return (f"ОТКАЗ: запрос '{query}' уже выполнялся через arxiv_search в этой сессии. "
-                    "Переформулируй или читай read_notes/kb_search.")
+            return (f"REJECTED: query '{query}' has already been executed via arxiv_search in this session. "
+                    "Rephrase or read read_notes/kb_search.")
         fuzzy = is_similar_to_seen(dedup_key)
         if fuzzy and fuzzy != dedup_key:
-            return (f"ОТКАЗ: arxiv_search '{query}' слишком похож на уже выполненный '{fuzzy}'. "
-                    "Смени термины, автора или год.")
+            return (f"REJECTED: arxiv_search '{query}' is too similar to an already executed '{fuzzy}'. "
+                    "Change terms, author or year.")
         log_query(dedup_key)
 
         if cats:
@@ -171,16 +171,16 @@ class ArxivSearch(BaseTool):
         try:
             xml_text = _helpers._fetch_text(url, timeout=20)
         except TimeoutError:
-            return "таймаут поиска arxiv_search"
+            return "arxiv_search timeout"
         except Exception as exc:
-            return f"ошибка arxiv_search: {str(exc)[:300]}"
+            return f"arxiv_search error: {str(exc)[:300]}"
 
         try:
             data = _helpers._parse_arxiv_feed(xml_text)
         except Exception:
-            return f"не удалось распарсить arXiv feed: {xml_text[:300]}"
+            return f"failed to parse arXiv feed: {xml_text[:300]}"
         if not data:
-            return f"нет результатов arxiv_search: {query}"
+            return f"no arxiv_search results: {query}"
 
         from datetime import datetime, timedelta
         cutoff = (datetime.now(UTC) - timedelta(days=_cfg.ARXIV_RECENT_DAYS)).date().isoformat()
@@ -190,8 +190,8 @@ class ArxivSearch(BaseTool):
             data = fresh[:limit]
         else:
             data = data[:limit]
-            stale_note = (f"\n\n⚠️  все результаты старше {_cfg.ARXIV_RECENT_DAYS // 365} лет "
-                          f"(cutoff={cutoff}) — показаны как fallback")
+            stale_note = (f"\n\n⚠️  all results older than {_cfg.ARXIV_RECENT_DAYS // 365} years "
+                          f"(cutoff={cutoff}) — shown as fallback")
 
         lines = []
         auto_saved = 0
@@ -225,9 +225,9 @@ class ArxivSearch(BaseTool):
 
         footer_parts = []
         if auto_saved:
-            footer_parts.append(f"📥 авто-сохранено в kb: {auto_saved}")
+            footer_parts.append(f"📥 auto-saved to kb: {auto_saved}")
         if auto_filtered:
-            footer_parts.append(f"🚫 отфильтровано domain gate: {auto_filtered}")
+            footer_parts.append(f"🚫 filtered by domain gate: {auto_filtered}")
         footer = f"\n\n({', '.join(footer_parts)})" if footer_parts else ""
         return "\n\n".join(lines) + footer + stale_note
 
@@ -235,42 +235,42 @@ class ArxivSearch(BaseTool):
 @register_tool("semantic_scholar_search")
 class SemanticScholarSearch(BaseTool):
     description = (
-        "Поиск через Semantic Scholar Graph API (api.semanticscholar.org). "
-        "Альтернатива arxiv_search для cross-disciplinary тем (когда нужны не только "
-        "arxiv-препринты, но и журнальные публикации, ACL/NeurIPS/ICML и т.п.). "
-        "Возвращает paperId, title, year, authors, abstract; если у статьи есть "
-        "arxiv-id (через externalIds.ArXiv), он используется как первичный ID и попадёт "
-        "в kb. Без arxiv-id статьи показываются, но НЕ автосохраняются в kb (verifier "
-        "требует arxiv-id для AppendNotes).\n"
-        "Опционально: year='2023-2025' (фильтр по годам), fields_of_study=['Computer Science']."
+        "Search via the Semantic Scholar Graph API (api.semanticscholar.org). "
+        "Alternative to arxiv_search for cross-disciplinary topics (when you need not "
+        "only arxiv preprints but also journal publications, ACL/NeurIPS/ICML etc.). "
+        "Returns paperId, title, year, authors, abstract; if the paper has an arxiv-id "
+        "(via externalIds.ArXiv) it is used as the primary ID and lands in kb. Papers "
+        "without an arxiv-id are shown but NOT auto-saved to kb (the verifier requires "
+        "an arxiv-id for AppendNotes).\n"
+        "Optional: year='2023-2025' (year range), fields_of_study=['Computer Science']."
     )
     parameters = [
-        {"name": "query", "type": "string", "description": "Запрос (свободный текст)", "required": True},
-        {"name": "limit", "type": "integer", "description": "1-10 (по умолчанию 5)", "required": False},
+        {"name": "query", "type": "string", "description": "Query (free text)", "required": True},
+        {"name": "limit", "type": "integer", "description": "1-10 (default 5)", "required": False},
         {"name": "year", "type": "string",
-         "description": "Опц. диапазон лет '2023-2025' или одиночный год '2024'", "required": False},
+         "description": "Optional year range '2023-2025' or single year '2024'", "required": False},
     ]
 
     def call(self, params: str, **kwargs) -> str:
         p = parse_args(params)
         query = (p.get("query") or "").strip()
         if not query:
-            return "ошибка: query обязателен"
+            return "error: query is required"
         limit = max(1, min(int(p.get("limit", 5)), 10))
         year_raw = (p.get("year") or "").strip()
-        # Sanitize year: только цифры и одно тире
+        # Sanitize year: digits and optionally one dash
         year = ""
         if year_raw and re.fullmatch(r"20\d{2}(?:-20\d{2})?", year_raw):
             year = year_raw
 
         dedup_key = f"s2: {query}" + (f" [year={year}]" if year else "")
         if normalize_query(dedup_key) in seen_queries():
-            return (f"ОТКАЗ: запрос '{query}' уже выполнялся через semantic_scholar_search. "
-                    "Переформулируй или читай read_notes/kb_search.")
+            return (f"REJECTED: query '{query}' has already been executed via semantic_scholar_search. "
+                    "Rephrase or read read_notes/kb_search.")
         fuzzy = is_similar_to_seen(dedup_key)
         if fuzzy and fuzzy != dedup_key:
-            return (f"ОТКАЗ: semantic_scholar_search '{query}' похож на '{fuzzy}'. "
-                    "Смени термины.")
+            return (f"REJECTED: semantic_scholar_search '{query}' is similar to '{fuzzy}'. "
+                    "Change terms.")
         log_query(dedup_key)
 
         qs: dict[str, str | int] = {
@@ -284,17 +284,17 @@ class SemanticScholarSearch(BaseTool):
         try:
             raw = _helpers._fetch_text(url, timeout=20)
         except TimeoutError:
-            return "таймаут поиска semantic_scholar_search"
+            return "semantic_scholar_search timeout"
         except Exception as exc:
-            return f"ошибка semantic_scholar_search: {str(exc)[:300]}"
+            return f"semantic_scholar_search error: {str(exc)[:300]}"
 
         try:
             payload = json.loads(raw)
         except Exception:
-            return f"невалидный JSON от Semantic Scholar: {raw[:300]}"
+            return f"invalid JSON from Semantic Scholar: {raw[:300]}"
         items = payload.get("data") or []
         if not items:
-            return f"нет результатов semantic_scholar_search: {query}"
+            return f"no semantic_scholar_search results: {query}"
 
         lines: list[str] = []
         auto_saved = 0
@@ -339,11 +339,11 @@ class SemanticScholarSearch(BaseTool):
 
         footer_parts = []
         if auto_saved:
-            footer_parts.append(f"📥 авто-сохранено в kb: {auto_saved}")
+            footer_parts.append(f"📥 auto-saved to kb: {auto_saved}")
         if auto_filtered:
-            footer_parts.append(f"🚫 отфильтровано domain gate: {auto_filtered}")
+            footer_parts.append(f"🚫 filtered by domain gate: {auto_filtered}")
         if no_arxiv:
-            footer_parts.append(f"⚠️ без arxiv-id (не сохранены): {no_arxiv}")
+            footer_parts.append(f"⚠️ without arxiv-id (not saved): {no_arxiv}")
         footer = f"\n\n({', '.join(footer_parts)})" if footer_parts else ""
         return "\n\n".join(lines) + footer
 
@@ -351,28 +351,28 @@ class SemanticScholarSearch(BaseTool):
 @register_tool("github_search")
 class GithubSearch(BaseTool):
     description = (
-        "Поиск по GitHub через официальный `gh` CLI. "
-        "Используй для нахождения РЕАЛИЗАЦИЙ и ДАТАСЕТОВ к бумагам из hf_papers: "
-        "нашёл метод в абстракте → ищи его репозиторий здесь. "
-        "type='repos' — репозитории (по умолчанию), type='code' — поиск кода.\n"
-        "ВАЖНО: query должен быть КОРОТКИМ — 2-4 ключевых слова. "
-        "НЕ пиши внутрь query 'stars:>=10' или 'language:python' — для этого используй "
-        "отдельные параметры min_stars и language."
+        "Search GitHub via the official `gh` CLI. "
+        "Use to find IMPLEMENTATIONS and DATASETS for papers from hf_papers: "
+        "found a method in the abstract → look for its repository here. "
+        "type='repos' — repositories (default), type='code' — code search.\n"
+        "IMPORTANT: query must be SHORT — 2-4 keywords. "
+        "Do NOT put 'stars:>=10' or 'language:python' inside the query — use the "
+        "dedicated min_stars and language parameters instead."
     )
     parameters = [
         {"name": "query", "type": "string",
-         "description": "2-4 ключевых слова БЕЗ qualifiers", "required": True},
+         "description": "2-4 keywords WITHOUT qualifiers", "required": True},
         {"name": "type", "type": "string",
-         "description": "'repos' (по умолчанию) или 'code'", "required": False},
+         "description": "'repos' (default) or 'code'", "required": False},
         {"name": "limit", "type": "integer",
-         "description": "Кол-во результатов 1-10 (по умолчанию 5)", "required": False},
+         "description": "Number of results 1-10 (default 5)", "required": False},
         {"name": "min_stars", "type": "integer",
-         "description": "минимум звёзд (для type=repos)", "required": False},
+         "description": "minimum stars (for type=repos)", "required": False},
         {"name": "language", "type": "string",
-         "description": "язык программирования (для type=repos)", "required": False},
+         "description": "programming language (for type=repos)", "required": False},
     ]
 
-    _QUALIFIER_RE = None  # lazy-инициализация в call()
+    _QUALIFIER_RE = None  # lazy init in call()
 
     @staticmethod
     def _parse_qualifiers(raw_query: str) -> tuple[str, int | None, str | None]:
@@ -416,14 +416,14 @@ class GithubSearch(BaseTool):
                 passed, reason = _helpers.gate_repo_for_kb(name, desc)
                 if not passed:
                     _helpers.log.debug("github repo gate skipped %s (%s)", name, reason)
-                    lines[-1] += f"\n         ⊘ gate:{reason} — не сохранено в kb"
+                    lines[-1] += f"\n         ⊘ gate:{reason} — not saved to kb"
                     continue
                 try:
                     kb_mod.add(kb_mod.Atom(
                         id=name, kind="repo", topic=cleaned_query,
                         title=name, url=url,
                         stars=int(stars or 0), lang=lang,
-                        claim=desc or f"{lang} репозиторий, {stars}★",
+                        claim=desc or f"{lang} repository, {stars}★",
                     ))
                     auto_saved += 1
                 except Exception as e:
@@ -444,7 +444,7 @@ class GithubSearch(BaseTool):
         p = parse_args(params)
         raw_query = p.get("query", "") or ""
         if not raw_query:
-            return "ошибка: query обязателен"
+            return "error: query is required"
         search_type = p.get("type", "repos").strip().lower()
         if search_type not in ("repos", "code"):
             search_type = "repos"
@@ -452,16 +452,16 @@ class GithubSearch(BaseTool):
 
         cleaned_query, extracted_min_stars, extracted_language = self._parse_qualifiers(raw_query)
         if not cleaned_query:
-            return "ошибка: после удаления qualifiers query пустой — пиши 2-4 ключевых слова"
+            return "error: after stripping qualifiers the query is empty — pass 2-4 keywords"
 
         word_count = len([w for w in cleaned_query.split() if len(w) >= 2])
         if word_count > _cfg.MAX_GITHUB_QUERY_WORDS:
             words = cleaned_query.split()
             short_hint = " ".join(words[:3])
-            return (f"ОТКАЗ: query '{cleaned_query}' слишком длинный ({word_count} слов). "
-                    f"github search плохо работает с длинными фразами — сократи до 2-3 ключевых "
-                    f"терминов (попробуй: '{short_hint}') ИЛИ откажись от github_search для этой "
-                    "подтемы, если она чисто теоретическая.")
+            return (f"REJECTED: query '{cleaned_query}' is too long ({word_count} words). "
+                    f"github search works poorly with long phrases — shorten to 2-3 key "
+                    f"terms (try: '{short_hint}') OR skip github_search for this "
+                    "sub-topic if it is purely theoretical.")
         min_stars = p.get("min_stars")
         if min_stars is None and extracted_min_stars is not None:
             min_stars = extracted_min_stars
@@ -471,17 +471,17 @@ class GithubSearch(BaseTool):
         if language:
             dedup_key += f" lang={language}"
         if normalize_query(dedup_key) in seen_queries():
-            return (f"ОТКАЗ: GitHub-запрос '{cleaned_query}' (type={search_type}"
-                    f"{', lang=' + language if language else ''}) уже делался. "
-                    "Переформулируй или читай read_notes.")
+            return (f"REJECTED: GitHub query '{cleaned_query}' (type={search_type}"
+                    f"{', lang=' + language if language else ''}) has already been issued. "
+                    "Rephrase or read read_notes.")
         fuzzy = is_similar_to_seen(dedup_key)
         if fuzzy and fuzzy != dedup_key:
-            return (f"ОТКАЗ: GitHub-запрос '{cleaned_query}' слишком похож на '{fuzzy}'. "
-                    f"Действия по приоритету: (1) kb_search '{cleaned_query}' — возможно мы уже "
-                    f"это искали и атом лежит в kb; (2) read_notes — поищи что уже записано; "
-                    f"(3) если всё-таки нужен github — выбери другой аспект [FOCUS] "
-                    f"(конкретный метод/датасет, а не саму тему); (4) plan_close_task текущий "
-                    f"[FOCUS] с evidence из notes и переходи к следующему [TODO].")
+            return (f"REJECTED: GitHub query '{cleaned_query}' is too similar to '{fuzzy}'. "
+                    f"Priority actions: (1) kb_search '{cleaned_query}' — maybe we already "
+                    f"searched and an atom sits in kb; (2) read_notes — look for what is already written; "
+                    f"(3) if github really is needed — pick another [FOCUS] angle "
+                    f"(a specific method/dataset rather than the topic itself); (4) plan_close_task the "
+                    f"current [FOCUS] with evidence from notes and move to the next [TODO].")
         log_query(dedup_key)
 
         if search_type == "repos":
@@ -511,18 +511,18 @@ class GithubSearch(BaseTool):
         stale_note = ""
         r = cli_run.run(_build_args(with_freshness=(search_type == "repos")), timeout=20)
         if r.returncode == 127:
-            return "ошибка: `gh` CLI не найден в PATH (установи: brew install gh)"
+            return "error: `gh` CLI not found in PATH (install: brew install gh)"
         if r.returncode == 124:
-            return "таймаут поиска GitHub"
+            return "GitHub search timeout"
         if not r.ok:
             err = r.stderr.strip()[:400]
             if "authentication" in err.lower() or "auth" in err.lower() or "login" in err.lower():
-                return "ошибка gh: нужна авторизация. Выполни в терминале: `gh auth login`"
-            return f"ошибка gh: {err}"
+                return "gh error: authentication required. Run in terminal: `gh auth login`"
+            return f"gh error: {err}"
         try:
             data = json.loads(r.stdout)
         except Exception:
-            return f"не удалось распарсить JSON: {r.stdout[:300]}"
+            return f"failed to parse JSON: {r.stdout[:300]}"
         if not data and search_type == "repos":
             r2 = cli_run.run(_build_args(with_freshness=False), timeout=20)
             if r2.ok:
@@ -532,17 +532,17 @@ class GithubSearch(BaseTool):
                     data2 = []
                 if data2:
                     data = data2
-                    stale_note = (f"\n\n⚠️  свежих репо (updated >= {recent_cutoff}) нет — "
-                                  f"показаны более старые результаты как fallback")
+                    stale_note = (f"\n\n⚠️  no fresh repos (updated >= {recent_cutoff}) — "
+                                  f"older results shown as fallback")
         if not data:
             hint = ""
             if len(cleaned_query.split()) >= 4:
-                hint = " — попробуй СОКРАТИТЬ запрос до 2-3 ключевых слов"
+                hint = " — try SHORTENING the query to 2-3 keywords"
             elif min_stars and int(min_stars) >= 50:
-                hint = f" — попробуй снизить min_stars (текущий={min_stars})"
+                hint = f" — try lowering min_stars (current={min_stars})"
             elif language:
-                hint = f" — попробуй БЕЗ language='{language}'"
-            return f"нет результатов на GitHub: '{cleaned_query}'{hint}"
+                hint = f" — try WITHOUT language='{language}'"
+            return f"no GitHub results: '{cleaned_query}'{hint}"
 
         if search_type == "repos":
             lines, auto_saved = self._format_repo_results(data, cleaned_query)
@@ -550,7 +550,7 @@ class GithubSearch(BaseTool):
             lines = self._format_code_results(data)
             auto_saved = 0
 
-        footer = f"\n\n(📥 авто-сохранено в kb: {auto_saved})" if auto_saved else ""
+        footer = f"\n\n(📥 auto-saved to kb: {auto_saved})" if auto_saved else ""
         return "\n\n".join(lines) + footer + stale_note
 
 

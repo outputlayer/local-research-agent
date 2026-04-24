@@ -24,7 +24,7 @@ def _call(focus, max_chars=None, min_jaccard=None):
 
 
 def test_missing_notes(_isolated_notes):
-    assert _call("anything") == "(заметок нет)"
+    assert _call("anything") == "(no notes)"
 
 
 def test_empty_focus(_isolated_notes):
@@ -86,6 +86,6 @@ def test_header_matches_actually_included_count(_isolated_notes):
     assert header_n == included_count, (
         f"header={header_n} but actually included={included_count}"
     )
-    # При этом должно быть честно указано что обрезано
+    # При этом должно быть честно указано что truncated
     if header_n < 5:
-        assert "обрезано" in out
+        assert "truncated" in out

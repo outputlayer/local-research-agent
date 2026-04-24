@@ -20,7 +20,7 @@ def plan_tools_env(tmp_path, monkeypatch):
 def test_plan_add_task_without_plan_returns_error(plan_tools_env):
     _, tools, _ = plan_tools_env
     out = tools.PlanAddTask().call({"title": "без плана"})
-    assert "ошибка" in out.lower()
+    assert "error" in out.lower()
 
 
 def test_plan_add_task_adds_emerged_child(plan_tools_env):
@@ -32,7 +32,7 @@ def test_plan_add_task_adds_emerged_child(plan_tools_env):
         "parent": parent_id,
         "why": "встретили в абстракте",
     })
-    assert "добавлено" in out
+    assert "added" in out
     reloaded = plan.load()
     assert reloaded is not None
     child = next((t for t in reloaded.tasks if t.title == "всплывшая подтема"), None)
@@ -50,7 +50,7 @@ def test_plan_close_task_marks_done_with_evidence(plan_tools_env):
         "evidence": "2401.00001, kb:Paper_Alpha",
         "why": "3 факта в notes",
     })
-    assert "закрыто" in out
+    assert "closed" in out
     reloaded = plan.load()
     closed = reloaded.get(tid)
     assert closed.status == "done"
@@ -67,7 +67,7 @@ def test_plan_split_task_creates_children(plan_tools_env):
         "subtitles": "под A | под B | под C",
         "why": "слишком широко",
     })
-    assert "разбито" in out
+    assert "split" in out
     reloaded = plan.load()
     assert reloaded.get(tid).status == "dropped"
     children = [t for t in reloaded.tasks if t.parent == tid]
@@ -81,7 +81,7 @@ def test_plan_split_task_rejects_single_subtitle(plan_tools_env):
         "id": "T1",
         "subtitles": "только одна подзадача",
     })
-    assert "ошибка" in out.lower()
+    assert "error" in out.lower()
 
 
 def test_plan_add_task_respects_max_open_limit(plan_tools_env):
@@ -92,7 +92,7 @@ def test_plan_add_task_respects_max_open_limit(plan_tools_env):
         p.add_task("filler", origin="emerged")
     plan.save(p)
     out = tools.PlanAddTask().call({"title": "overflow attempt"})
-    assert "ошибка" in out.lower()
+    assert "error" in out.lower()
     assert "MAX_OPEN_TASKS" in out
 
 
@@ -100,4 +100,4 @@ def test_plan_close_task_unknown_id_returns_error(plan_tools_env):
     plan, tools, _ = plan_tools_env
     plan.reset("x")
     out = tools.PlanCloseTask().call({"id": "T99"})
-    assert "ошибка" in out.lower()
+    assert "error" in out.lower()

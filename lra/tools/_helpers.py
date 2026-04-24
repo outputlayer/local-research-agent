@@ -1,9 +1,9 @@
-"""Shared helpers для tools: verifier, domain gate, arxiv feed parsing, wrap-logger.
+"""Shared helpers for tools: verifier, domain gate, arxiv feed parsing, wrap-logger.
 
-Вынесено из монолитного `lra/tools.py`, чтобы снизить размер основного модуля
-и подготовить дальнейшее дробление на тематические подпакеты (search, notes,
-draft, plan, kb и т.д.). Все @register_tool классы импортируют отсюда
-верификаторы/gate и helpers для HTTP-фетчинга arXiv.
+Extracted from the monolithic `lra/tools.py` to shrink the main module and
+pave the way for further splits into topical subpackages (search, notes,
+draft, plan, kb, etc.). All @register_tool classes import verifiers/gate and
+helpers for arXiv HTTP fetching from here.
 """
 from __future__ import annotations
 
@@ -32,25 +32,25 @@ _ARXIV_FEED_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
 
 def _has_core_vocabulary(plan_text: str) -> bool:
-    """Проверяет наличие строки `**Core vocabulary:** ...` в plan.md.
+    """Checks whether a `**Core vocabulary:** ...` line is present in plan.md.
 
-    Сигнал того, что bootstrap planner отработал успешно (LLM сгенерил 8-15
-    специфичных доменных терминов). Если строки нет — bootstrap упал
-    (mlx crashed / невалидный JSON / fallback на static plan), и domain gate
-    работает только по 4 словам из заголовка темы. Это пропускало мины и
-    audio vocoder под видом EW.
+    It signals that the bootstrap planner succeeded (the LLM generated 8-15
+    specific domain terms). If the line is missing — bootstrap failed (mlx
+    crashed / invalid JSON / fallback to static plan) and the domain gate
+    operates only on the 4 words from the topic header. That let through
+    mines and an audio vocoder disguised as EW.
 
-    При strict_domain_gate=True и vocab_required=True (default) такой режим
-    fail-closed: gate возвращает False с reason='no_vocabulary' до тех пор,
-    пока пользователь явно не разрешит работу без vocabulary через
+    With strict_domain_gate=True and vocab_required=True (default) this mode
+    is fail-closed: the gate returns False with reason='no_vocabulary' until
+    the user explicitly allows work without a vocabulary via
     `CFG['allow_no_vocab'] = True`.
     """
     if not plan_text:
         return False
     for ln in plan_text.splitlines()[:10]:
         if ln.lstrip().lower().startswith("**core vocabulary:"):
-            # Проверяем что после двоеточия есть хоть какие-то термины,
-            # а не просто пустая строка от broken bootstrap.
+            # Check that after the colon there are some terms, not just an
+            # empty line from broken bootstrap.
             payload = ln.split(":", 1)[1] if ":" in ln else ""
             payload = payload.strip().strip("*").strip()
             return len(payload) >= 5
@@ -58,11 +58,11 @@ def _has_core_vocabulary(plan_text: str) -> bool:
 
 
 def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
-    """Возвращает (known_ids, unknown_ids) — какие arxiv-id из content есть в kb.jsonl.
+    """Returns (known_ids, unknown_ids) — which arxiv-ids from content are in kb.jsonl.
 
-    Используется pre-append verifier'ом в AppendNotes: explorer не должен добавлять в notes
-    факты с id, которых ни hf_papers, ни kb_search ни разу не возвращали в этой сессии.
-    Это отсекает галлюцинации на этапе записи, а не на финальной валидации draft.md.
+    Used by the pre-append verifier in AppendNotes: the explorer must not add facts
+    with ids that neither hf_papers nor kb_search ever returned in this session.
+    This cuts hallucinations at write time rather than at final draft.md validation.
     """
     ids = extract_ids(content)
     if not ids:
@@ -72,43 +72,46 @@ def verify_ids_against_kb(content: str) -> tuple[set[str], set[str]]:
 
 
 def domain_gate(content: str) -> tuple[bool, str, set[str], set[str]]:
-    """Two-tier domain gate для AppendNotes и hf_papers kb auto-save.
+    """Two-tier domain gate for AppendNotes and hf_papers kb auto-save.
 
-    Правило: paper проходит ⇔ ≥2 совпадений с HEADER plan.md.
-    HEADER = первая строка ('# Plan: ...') — это исходный topic пользователя
-    и наиболее стабильный носитель core-терминов. Seeds из [Tn]-задач дрейфуют
-    и содержат мусор ('support' в 'electronic support measures' даёт false
-    positive на emotional-support-conversations paper) — используются только
-    для диагностики причины отказа в rejected.jsonl, но не для прохода.
+    Rule: a paper passes ⇔ ≥2 matches with the HEADER of plan.md.
+    HEADER = the first line ('# Plan: ...') — it is the user's original
+    topic and the most stable carrier of core terms. Seeds from [Tn] tasks
+    drift and carry noise ('support' inside 'electronic support measures'
+    yields a false positive on emotional-support-conversations papers) —
+    so they are used only for diagnosing the rejection reason in
+    rejected.jsonl, not for letting a paper through.
 
-    Slow-start bypass: если в header <2 кандидатов — plan ещё generic, gate слеп.
+    Slow-start bypass: if the header has <2 candidates — the plan is still
+    generic and the gate is blind.
 
     Returns (passed, reason, overlap_header, overlap_seeds). reason ∈
-    reason ∈ {"no_plan", "slow_start", "no_core_hit", "weak_overlap", "passed"}.
+    {"no_plan", "slow_start", "no_core_hit", "weak_overlap", "passed"}.
 
-    Адаптивный порог: при бедном header'е (≤ 4 core-kws) достаточно 1 overlap,
-    иначе требуется ≥2. Это ловит кейсы узких тем типа
-    `# Plan: electronic warfare (EW) and ELINT` (4 слова: electronic/warfare/
-    elint/intelligence), где paper «cognitive radar jamming» даёт только 1 hit
-    (`warfare` → 0, но `electronic` → 1) и иначе бы резался.
+    Adaptive threshold: with a poor header (≤ 4 core-kws) one overlap is
+    enough, otherwise ≥2 is required. This catches narrow topics like
+    `# Plan: electronic warfare (EW) and ELINT` (4 words: electronic/warfare/
+    elint/intelligence), where a paper 'cognitive radar jamming' produces
+    only 1 hit (`warfare` → 0, `electronic` → 1) and would otherwise be cut.
     """
     if not _cfg.PLAN_PATH.exists():
         return True, "no_plan", set(), set()
     plan_text = _cfg.PLAN_PATH.read_text(encoding="utf-8")
-    # Fail-closed: если bootstrap не положил **Core vocabulary:**, gate работает
-    # только по 4 словам заголовка → пропускает мины и audio vocoder. Блокируем
-    # все append'ы пока пользователь явно не разрешит CFG['allow_no_vocab']=True.
+    # Fail-closed: if bootstrap did not emit **Core vocabulary:**, the gate
+    # operates on only the 4 header words → lets mines and audio vocoders
+    # through. Block all appends until the user explicitly allows via
+    # CFG['allow_no_vocab']=True.
     if not _has_core_vocabulary(plan_text) and not _cfg.CFG.get("allow_no_vocab", False):
         return False, "no_vocabulary", set(), set()
     header_kws, seed_kws = extract_topic_keywords_tiered(plan_text)
     if len(header_kws) < 2:
         return True, "slow_start", header_kws, set()
-    # Явные anti-keywords: audio vocoder, jailbreak, automotive lidar —
-    # блокируем ДО positive-check чтобы не тратить overlap-слоты.
+    # Explicit anti-keywords: audio vocoder, jailbreak, automotive lidar —
+    # block BEFORE positive-check to not waste overlap slots.
     anti = has_anti_keyword(content)
     if anti:
         return False, f"anti_keyword:{anti}", set(), set()
-    # Собираем материал из kb для id, упомянутых в content.
+    # Gather material from kb for ids mentioned in content.
     ids_in_content = extract_ids(content)
     abstracts: list[str] = [content]
     if ids_in_content:
@@ -122,7 +125,7 @@ def domain_gate(content: str) -> tuple[bool, str, set[str], set[str]]:
     o_seeds = content_kws & seed_kws
     if not o_header:
         return False, "no_core_hit", set(), o_seeds
-    # Адаптивный порог: бедный header ⇒ 1 hit достаточно, богатый ⇒ ≥2.
+    # Adaptive threshold: poor header ⇒ 1 hit is enough, rich ⇒ ≥2.
     min_hits = 1 if len(header_kws) <= 4 else 2
     if len(o_header) < min_hits:
         return False, "weak_overlap", o_header, o_seeds
@@ -130,15 +133,17 @@ def domain_gate(content: str) -> tuple[bool, str, set[str], set[str]]:
 
 
 def gate_paper_for_kb(paper_id: str, title: str, abstract: str) -> tuple[bool, str, set[str], set[str]]:
-    """Облегчённый gate для hf_papers/kb_add ДО записи в kb.jsonl.
+    """Lightweight gate for hf_papers/kb_add BEFORE writing to kb.jsonl.
 
-    Иначе explorer наполняет KB off-topic paper'ами (ComVo с auto-save остаётся
-    в KB даже если AppendNotes его режет, т.к. KB-запись идёт РАНЬШЕ в hf_papers).
-    Работает на сыром abstract (kb ещё не знает этот id).
+    Otherwise the explorer fills KB with off-topic papers (ComVo with
+    auto-save remains in KB even if AppendNotes rejects it, since KB writes
+    happen EARLIER in hf_papers). Works on the raw abstract (kb does not
+    yet know this id).
 
-    Returns (passed, reason, o_header, header_kws) — o_header/header_kws нужны
-    вызывающему для записи диагностики в rejected.jsonl (см. `_log_kb_rejected`).
-    Адаптивный порог идентичен `domain_gate`: ≤4 core-kws → 1 hit, иначе ≥2.
+    Returns (passed, reason, o_header, header_kws) — the caller needs
+    o_header/header_kws to record diagnostics in rejected.jsonl
+    (see `_log_kb_rejected`). Adaptive threshold identical to `domain_gate`:
+    ≤4 core-kws → 1 hit, otherwise ≥2.
     """
     if not _cfg.CFG.get("strict_domain_gate", True) or not _cfg.PLAN_PATH.exists():
         return True, "bypass", set(), set()
@@ -162,10 +167,10 @@ def gate_paper_for_kb(paper_id: str, title: str, abstract: str) -> tuple[bool, s
 
 
 def gate_repo_for_kb(repo_name: str, description: str) -> tuple[bool, str]:
-    """Gate для GitHub-репо перед авто-сохранением в kb.jsonl.
+    """Gate for a GitHub repo before auto-saving to kb.jsonl.
 
     ComVo (hs-oh-prml/ComVo) — audio vocoder, desc: 'neural vocoder for audio synthesis'.
-    Без этого gate он сохраняется в KB т.к. desc не проверялся.
+    Without this gate it is saved to KB because desc was not inspected.
 
     Returns (passed, reason). reason ∈ {"bypass", "slow_start", "anti_keyword",
     "no_core_hit", "weak_overlap", "passed"}.
@@ -194,10 +199,11 @@ def gate_repo_for_kb(repo_name: str, description: str) -> tuple[bool, str]:
 def _log_kb_rejected(paper_id: str, title: str, reason: str,
                      o_header: set[str], header_kws: set[str],
                      source: str) -> None:
-    """Логирует skip'нутый paper из `gate_paper_for_kb` в rejected.jsonl.
+    """Logs a paper skipped by `gate_paper_for_kb` to rejected.jsonl.
 
-    Без этого skip уходит только в log.debug и причина не видна пользователю —
-    см. session 2026-04-22: 17 поисков, 1 paper в KB, 0 reject entries от gate_paper_for_kb.
+    Without this the skip lives only in log.debug and the reason is
+    invisible to the user — see session 2026-04-22: 17 searches, 1 paper
+    in KB, 0 reject entries from gate_paper_for_kb.
     """
     from datetime import datetime
     ensure_dir()
@@ -217,7 +223,7 @@ def _log_kb_rejected(paper_id: str, title: str, reason: str,
 def _log_rejected(content: str, ids: set[str], reason: str,
                   header_kws: set[str], seed_kws: set[str],
                   o_header: set[str], o_seeds: set[str]) -> None:
-    """Пишет отклонённую заметку в research/rejected.jsonl для анализа."""
+    """Writes a rejected note to research/rejected.jsonl for later analysis."""
     from datetime import datetime
     ensure_dir()
     entry = {
@@ -262,10 +268,11 @@ def _parse_arxiv_feed(xml_text: str) -> list[dict[str, str]]:
 
 
 def _wrap_with_logging(cls):
-    """Оборачивает `cls.call`, чтобы каждый вызов попадал в лог единообразно.
+    """Wraps `cls.call` so every call lands in the log uniformly.
 
-    Идемпотентен (повторный вызов — no-op через `_tool_logged` флаг).
-    Loop-detection через lra.tool_tracker — блокирует N-ный подряд идентичный вызов.
+    Idempotent (a second call is a no-op via the `_tool_logged` flag).
+    Loop-detection via lra.tool_tracker — blocks the Nth consecutive
+    identical call.
     """
     orig = cls.call
     if getattr(orig, "_tool_logged", False):
@@ -279,8 +286,8 @@ def _wrap_with_logging(cls):
             preview_src = str(params)
         preview = (preview_src or "").replace("\n", " ")[:160]
         log.info("[TOOL_CALL] %s(%s)", tool_name, preview)
-        # Loop detection: блокируем N-ный подряд идентичный вызов.
-        # See lra/tool_tracker.py для мотивации (run.log compact_notes x16).
+        # Loop detection: block the Nth identical consecutive call.
+        # See lra/tool_tracker.py for motivation (run.log compact_notes x16).
         try:
             from lra import tool_tracker
             allowed, n = tool_tracker.check_call(tool_name, params)
@@ -288,21 +295,21 @@ def _wrap_with_logging(cls):
                 budget = tool_tracker._TRACKER._max_per_tool.get(tool_name)
                 total = tool_tracker._TRACKER._call_totals.get(tool_name, n)
                 if budget is not None and total > budget:
-                    log.warning("[TOOL_BUDGET] %s заблокирован: превышен бюджет %d/%d вызовов за сессию",
+                    log.warning("[TOOL_BUDGET] %s blocked: budget exceeded %d/%d calls this session",
                                 tool_name, total, budget)
                     return (
-                        f"ошибка: budget exceeded — {tool_name} уже вызван {total} раз "
-                        f"(лимит {budget} за сессию). Переходи к следующему шагу плана. "
-                        f"Не вызывай {tool_name} больше в этом прогоне."
+                        f"error: budget exceeded — {tool_name} has already been called {total} times "
+                        f"(limit {budget} per session). Move to the next plan step. "
+                        f"Do not call {tool_name} again in this run."
                     )
-                log.warning("[TOOL_LOOP] %s заблокирован: %d-й идентичный вызов подряд", tool_name, n)
+                log.warning("[TOOL_LOOP] %s blocked: %d-th consecutive identical call", tool_name, n)
                 return (
-                    f"ошибка: loop detected — {tool_name} вызван {n} раз подряд "
-                    f"с одинаковыми params. Смени стратегию: попробуй другой "
-                    f"tool, измени params или перейди к следующему шагу плана."
+                    f"error: loop detected — {tool_name} was called {n} times in a row "
+                    f"with the same params. Change strategy: try another tool, "
+                    f"change params or move to the next plan step."
                 )
         except Exception as _loop_err:
-            # tracker-баг не должен ронять tool execution
+            # a tracker bug must not crash tool execution
             log.debug("tool_tracker error: %s", _loop_err)
         try:
             return orig(self, params, **kwargs)
@@ -316,10 +323,11 @@ def _wrap_with_logging(cls):
 
 
 def _wrap_module_tools(module_globals: dict, module_name: str) -> None:
-    """Оборачивает все BaseTool-подклассы модуля в wrap_with_logging.
+    """Wraps every BaseTool subclass of the module with wrap_with_logging.
 
-    Вызывается в конце каждого sub-модуля tools/, чтобы только свои @register_tool
-    классы получили логгер (не трогаем импортированные из чужих модулей).
+    Called at the end of each tools/ submodule so that only its own
+    @register_tool classes get the logger (imported ones from foreign
+    modules are left alone).
     """
     for _obj in list(module_globals.values()):
         if isinstance(_obj, type) and issubclass(_obj, BaseTool) and _obj is not BaseTool:

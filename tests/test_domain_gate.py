@@ -64,7 +64,7 @@ def test_domain_gate_blocks_comvo_no_core_hit(_isolated):
     result = tools.AppendNotes().call(
         {"content": "[2603.11589] adversarial training для EW waveform generation"}
     )
-    assert "ОТКАЗ" in result and "no_core_hit" in result
+    assert "REJECTED" in result and "no_core_hit" in result
     assert not (_isolated / "notes.md").exists()
     import json
     rej_line = (_isolated / "rejected.jsonl").read_text(encoding="utf-8").strip().splitlines()[-1]
@@ -89,7 +89,7 @@ def test_domain_gate_blocks_single_generic_overlap(_isolated):
                "human feedback and empathy"),
     ))
     result = tools.AppendNotes().call({"content": "[2508.12935] intelligence of dialog agents"})
-    assert "ОТКАЗ" in result
+    assert "REJECTED" in result
 
 
 def test_domain_gate_passes_relevant_paper(_isolated):
@@ -102,7 +102,7 @@ def test_domain_gate_passes_relevant_paper(_isolated):
                "ELINT fingerprinting in contested spectrum environments"),
     ))
     result = tools.AppendNotes().call({"content": "[2401.00001] cognitive EW spectrum sensing"})
-    assert "ОТКАЗ" not in result
+    assert "REJECTED" not in result
     assert (_isolated / "notes.md").exists()
 
 
@@ -112,14 +112,14 @@ def test_domain_gate_bypassed_for_reflection_without_ids(_isolated):
     result = tools.AppendNotes().call(
         {"content": "## Lesson: hf_papers 'generic AI' даёт нерелевантные результаты"}
     )
-    assert "ОТКАЗ" not in result
+    assert "REJECTED" not in result
 
 
 def test_domain_gate_bypassed_without_plan(_isolated):
     from lra import kb, tools
     kb.add(kb.Atom(id="2401.00001", kind="paper", topic="t", claim="c"))
     result = tools.AppendNotes().call({"content": "[2401.00001] early finding"})
-    assert "ОТКАЗ" not in result
+    assert "REJECTED" not in result
 
 
 def test_domain_gate_lenient_flag(_isolated, monkeypatch):
@@ -133,7 +133,7 @@ def test_domain_gate_lenient_flag(_isolated, monkeypatch):
         lambda k, d=None: False if k == "strict_domain_gate" else original_get(k, d),
     )
     result = tools.AppendNotes().call({"content": "[2603.11589] off-topic paper"})
-    assert "ОТКАЗ" not in result
+    assert "REJECTED" not in result
 
 
 def test_gate_paper_for_kb_blocks_comvo(_isolated):
@@ -297,7 +297,7 @@ def test_append_notes_fails_closed_without_vocabulary(_isolated):
     kb.add(kb.Atom(id="2401.00001", kind="paper", topic="ew",
                    title="EW radar", claim="electronic warfare spectrum sensing"))
     result = tools.AppendNotes().call({"content": "[2401.00001] EW radar paper"})
-    assert "ОТКАЗ" in result and "no_vocabulary" in result
+    assert "REJECTED" in result and "no_vocabulary" in result
 
 
 def test_allow_no_vocab_escape_hatch(_isolated, monkeypatch):

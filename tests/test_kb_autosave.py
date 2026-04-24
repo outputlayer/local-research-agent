@@ -39,7 +39,7 @@ def test_hf_papers_autosaves_to_kb(tmp_path, monkeypatch):
     with patch("lra.tools.cli_run.run",
                return_value=CliResult(json.dumps(fake_papers), "", 0)):
         out = tools.HfPapers().call({"query": "novel unique topic keywords alpha", "limit": 5})
-    assert "авто-сохранено в kb: 2" in out
+    assert "auto-saved to kb: 2" in out
     atoms = kb.load()
     ids = {a["id"] for a in atoms}
     assert ids == {"2401.00001", "2401.00002"}
@@ -68,7 +68,7 @@ def test_github_search_autosaves_repos_above_threshold(tmp_path, monkeypatch):
         out = tools.GithubSearch().call(
             {"query": "totally distinct github topic beta", "type": "repos", "limit": 5})
     # Только репо с stars >= 10 должен попасть в kb
-    assert "авто-сохранено в kb: 1" in out
+    assert "auto-saved to kb: 1" in out
     atoms = kb.load()
     assert len(atoms) == 1
     a = atoms[0]

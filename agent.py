@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Тонкий CLI. Логика — в пакете `lra/`."""
+"""Thin CLI. All logic lives in the `lra/` package."""
 from __future__ import annotations
 
 import shutil
@@ -25,15 +25,13 @@ from lra.plan import PLAN_JSON_PATH
 
 
 def _check_clis():
-    """Проверяет наличие и авторизацию внешних CLI. Ничего не требует — только печатает статус."""
-    # hf
+    """Checks presence and auth of external CLIs. Requires nothing — only prints status."""
     if shutil.which("hf"):
-        print("   ✓ hf CLI найден")
+        print("   ✓ hf CLI found")
     else:
-        print("   ⚠️  hf CLI не найден (pip install huggingface_hub[cli]) — hf_papers не будет работать")
-    # gh — используем `gh api user --jq .login` (не зависит от локали)
+        print("   ⚠️  hf CLI not found (pip install huggingface_hub[cli]) — hf_papers will not work")
     if not shutil.which("gh"):
-        print("   ⚠️  gh CLI не найден (brew install gh) — github_search не будет работать")
+        print("   ⚠️  gh CLI not found (brew install gh) — github_search will not work")
         return
     try:
         r = subprocess.run(
@@ -42,27 +40,27 @@ def _check_clis():
         )
         login = r.stdout.strip()
         if r.returncode == 0 and login:
-            print(f"   ✓ gh CLI: авторизован как {login}")
+            print(f"   ✓ gh CLI: authenticated as {login}")
         else:
-            print("   ⚠️  gh CLI найден, но НЕ авторизован. Выполни: gh auth login")
+            print("   ⚠️  gh CLI found but NOT authenticated. Run: gh auth login")
     except Exception as e:
         print(f"   ⚠️  gh auth check failed: {e}")
 
 
 def main():
-    print(f"⏳ Загружаю {CFG['model']} ...")
+    print(f"⏳ Loading {CFG['model']} ...")
     get_mlx(CFG["model"])
-    print("🔧 Проверка внешних CLI:")
+    print("🔧 External CLI check:")
     _check_clis()
-    print("✅ Готово. Команды:")
-    print("   <тема>              — запустить ресёрч (alias: /research <тема>)")
-    print("   /resume             — дописать отчёт из существующих notes/synthesis/kb (без explorer)")
-    print("   /status [тема]      — показать статус текущего research (план, rejected evidence)")
-    print("   /hitl on|off        — переключить human-in-the-loop паузу после валидатора")
-    print("   /clean              — очистить рабочую папку (lessons/querylog остаются)")
-    print("   /forget             — стереть + глобальную Reflexion-память (archive и cache сохраняются)")
-    print("   /reset              — ПОЛНАЯ очистка: research/*, archive/*, .cache/*, run.log")
-    print("   /exit               — выход\n")
+    print("✅ Ready. Commands:")
+    print("   <topic>             — start research (alias: /research <topic>)")
+    print("   /resume             — finish report from existing notes/synthesis/kb (skip explorer)")
+    print("   /status [topic]     — show current research status (plan, rejected evidence)")
+    print("   /hitl on|off        — toggle human-in-the-loop pause after validator")
+    print("   /clean              — clean research dir (lessons/querylog kept)")
+    print("   /forget             — wipe + global Reflexion memory (archive and cache kept)")
+    print("   /reset              — FULL wipe: research/*, archive/*, .cache/*, run.log")
+    print("   /exit               — quit\n")
 
     while True:
         try:
@@ -79,7 +77,7 @@ def main():
             print()
             continue
         if q.startswith("/status"):
-            topic = q[len("/status"):].strip() or "(текущий research)"
+            topic = q[len("/status"):].strip() or "(current research)"
             print(_build_status_context(topic))
             print()
             continue
@@ -87,50 +85,45 @@ def main():
             arg = q[len("/hitl"):].strip().lower()
             if arg in ("on", "true", "1", "yes"):
                 CFG["hitl"] = True
-                print("🧑 HITL включён: после валидатора будет пауза с запросом правок\n")
+                print("🧑 HITL enabled: pipeline will pause after the validator asking for edits\n")
             elif arg in ("off", "false", "0", "no", ""):
                 CFG["hitl"] = False
-                print("🤖 HITL выключен (автоматический режим)\n")
+                print("🤖 HITL disabled (automatic mode)\n")
             else:
-                print(f"⚠️  неизвестный аргумент: {arg!r}. Используй: /hitl on | /hitl off\n")
+                print(f"⚠️  unknown argument: {arg!r}. Use: /hitl on | /hitl off\n")
             continue
         if q in ("/clean", "/clean-research"):
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH):
                 p.unlink(missing_ok=True)
-            print("🗑️  research/ очищена (lessons/querylog/archive сохранены)\n")
+            print("🗑️  research/ cleaned (lessons/querylog/archive kept)\n")
             continue
         if q == "/forget":
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH,
                       LESSONS_PATH, QUERYLOG_PATH):
                 p.unlink(missing_ok=True)
-            print("🧠  Стёрто + глобальные lessons/querylog (archive и cache остаются)\n")
+            print("🧠  Wiped + global lessons/querylog (archive and cache kept)\n")
             continue
         if q == "/reset":
-            # Полная очистка: всё в research/ (кроме самой папки), весь кеш, архив.
-            # Используем shutil.rmtree только для поддиректорий — саму research/ сохраняем.
-            confirm = input("⚠️  /reset удалит research/* + archive/* + .cache/*. "
-                            "Напиши 'yes' для подтверждения: ").strip().lower()
+            confirm = input("⚠️  /reset will delete research/* + archive/* + .cache/*. "
+                            "Type 'yes' to confirm: ").strip().lower()
             if confirm != "yes":
-                print("❌ отменено\n")
+                print("❌ cancelled\n")
                 continue
-            # файлы
             for p in (DRAFT_PATH, NOTES_PATH, PLAN_PATH, PLAN_JSON_PATH, SYNTHESIS_PATH, KB_PATH,
                       LESSONS_PATH, QUERYLOG_PATH, RUN_LOG_PATH):
                 p.unlink(missing_ok=True)
-            # поддиректории
             for d in (ARCHIVE_DIR, CACHE_DIR):
                 if d.exists():
                     shutil.rmtree(d, ignore_errors=True)
-            # пересоздаём пустые каталоги
             RESEARCH_DIR.mkdir(exist_ok=True)
             ARCHIVE_DIR.mkdir(exist_ok=True)
-            print("💥  Полный ресет: research/*, archive/*, .cache/*, run.log стёрты\n")
+            print("💥  Full reset: research/*, archive/*, .cache/*, run.log wiped\n")
             continue
 
         if q.startswith("/research"):
             q = q[len("/research"):].strip()
         if not q:
-            print("⚠️  укажи тему\n")
+            print("⚠️  please specify a topic\n")
             continue
         research_loop(q, depth=6, critic_rounds=2)
         print()

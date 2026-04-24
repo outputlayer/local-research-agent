@@ -1,14 +1,14 @@
-"""Публичный API пакета `lra.tools`.
+"""Public API of the `lra.tools` package.
 
-Раньше был один монолит `lra/tools.py` (~1070 LOC). Разбит на:
-- `_helpers.py` — верификаторы, domain gate, HTTP-утилиты, wrap_logger
+Previously a single monolith `lra/tools.py` (~1070 LOC). Now split into:
+- `_helpers.py` — verifiers, domain gate, HTTP utilities, wrap_logger
 - `_search.py`  — hf_papers, arxiv_search, github_search (~400 LOC)
-- `_artifacts.py` — notes/draft/plan/synthesis/lessons/kb/plan-mutation тулы (~330 LOC)
+- `_artifacts.py` — notes/draft/plan/synthesis/lessons/kb/plan-mutation tools (~330 LOC)
 
-Все исторические символы (`lra.tools.NOTES_PATH`, `lra.tools.HfPapers`,
-`lra.tools.verify_ids_against_kb` и т.д.) оставлены как re-exports ради
-существующих тестовых monkeypatch'ей. Новый код должен импортировать
-напрямую из submodule при желании, но публичный API — это только этот файл.
+All historical symbols (`lra.tools.NOTES_PATH`, `lra.tools.HfPapers`,
+`lra.tools.verify_ids_against_kb`, etc.) are kept as re-exports for the sake
+of existing test monkeypatches. New code may import directly from a
+submodule if desired, but the public API is this file.
 """
 from __future__ import annotations
 

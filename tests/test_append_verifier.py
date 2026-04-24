@@ -44,7 +44,7 @@ def test_append_notes_blocks_unknown_id(_isolated_research):
     result = tools.AppendNotes().call(
         {"content": "## hallucination\n[2401.99999] this id does not exist"}
     )
-    assert "ОТКАЗ" in result
+    assert "REJECTED" in result
     assert "2401.99999" in result
     # notes.md не должен быть создан
     assert not _isolated_research.joinpath("notes.md").exists()
@@ -54,7 +54,7 @@ def test_append_notes_allows_verified_id(_isolated_research):
     from lra import kb, tools
     kb.add(kb.Atom(id="2401.00001", kind="paper", topic="t", claim="c"))
     result = tools.AppendNotes().call({"content": "[2401.00001] valid fact"})
-    assert "notes.md" in result and "ОТКАЗ" not in result
+    assert "notes.md" in result and "REJECTED" not in result
     notes = _isolated_research.joinpath("notes.md").read_text(encoding="utf-8")
     assert "[2401.00001]" in notes
 
@@ -65,7 +65,7 @@ def test_append_notes_allows_repo_only(_isolated_research):
     result = tools.AppendNotes().call(
         {"content": "[repo: foo/bar ★150 Python] — модульная архитектура"}
     )
-    assert "ОТКАЗ" not in result
+    assert "REJECTED" not in result
     assert "notes.md" in result
 
 
@@ -75,7 +75,7 @@ def test_append_notes_mixed_blocks_if_any_unknown(_isolated_research):
     result = tools.AppendNotes().call(
         {"content": "[2401.00001] ok and [2401.99999] bad"}
     )
-    assert "ОТКАЗ" in result
+    assert "REJECTED" in result
     assert "2401.99999" in result
 
 
@@ -89,4 +89,4 @@ def test_append_notes_lenient_mode(_isolated_research, monkeypatch):
     result = tools.AppendNotes().call(
         {"content": "[2401.99999] would be blocked in strict mode"}
     )
-    assert "ОТКАЗ" not in result
+    assert "REJECTED" not in result

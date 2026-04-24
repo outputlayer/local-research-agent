@@ -55,7 +55,7 @@ def test_arxiv_search_filters_old_and_autosaves(tmp_path, monkeypatch):
 
     assert "2401.00001" in out
     assert "2201.00001" not in out
-    assert "авто-сохранено в kb: 1" in out
+    assert "auto-saved to kb: 1" in out
 
 
 def test_arxiv_search_fallback_when_all_old(tmp_path, monkeypatch):
@@ -92,7 +92,7 @@ def test_arxiv_search_domain_gate_skips_offtopic_autosave(tmp_path, monkeypatch)
     out = tool.call({"query": "support dialogue", "limit": 5})
 
     assert "2501.00001" in out
-    assert "отфильтровано domain gate: 1" in out
+    assert "filtered by domain gate: 1" in out
 
 
 def test_arxiv_search_categories_in_query(tmp_path, monkeypatch):

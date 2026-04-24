@@ -67,14 +67,14 @@ def test_s2_no_arxiv_not_saved(tmp_path, monkeypatch):
     out = tool.call({"query": "test query"})
 
     assert "[s2:no-arxiv-1]" in out
-    assert "без arxiv-id (не сохранены): 1" in out
+    assert "without arxiv-id (not saved): 1" in out
     # kb пустой
     assert not (tmp_path / "kb.jsonl").exists() or \
            (tmp_path / "kb.jsonl").read_text().strip() == ""
 
 
 def test_s2_dedup_blocks_repeat(tmp_path, monkeypatch):
-    """Повторный вызов с тем же query → ОТКАЗ через querylog."""
+    """Повторный вызов с тем же query → REJECTED через querylog."""
     tools = _patch(tmp_path, monkeypatch)
     (tmp_path / "plan.md").write_text("# Plan: x\n", encoding="utf-8")
     tool = tools.SemanticScholarSearch()
@@ -85,7 +85,7 @@ def test_s2_dedup_blocks_repeat(tmp_path, monkeypatch):
     tool.call({"query": "novel transformer"})
     out2 = tool.call({"query": "novel transformer"})
 
-    assert "ОТКАЗ" in out2
+    assert "REJECTED" in out2
     assert "semantic_scholar_search" in out2
 
 
@@ -118,4 +118,4 @@ def test_s2_empty_results(tmp_path, monkeypatch):
 
     out = tool.call({"query": "obscure topic xyz"})
 
-    assert "нет результатов" in out
+    assert "no" in out
